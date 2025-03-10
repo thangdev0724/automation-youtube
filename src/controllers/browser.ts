@@ -15,7 +15,7 @@ export class BrowserManager {
 
   private constructor() {
     // Tạo thư mục lưu user data nếu chưa tồn tại
-    this.userDataDir = `/Users/thangdev/Library/Application Support/Google/Chrome/Profile1`;
+    this.userDataDir = `../config/Profile1`;
   }
 
   public static getInstance(): BrowserManager {
@@ -37,20 +37,11 @@ export class BrowserManager {
         userDataDir: this.userDataDir,
       });
 
-      this.context = await chromium.launchPersistentContext(this.userDataDir, {
-        headless: options.headless,
-        slowMo: options.slowMo,
-        viewport: { width: 1920, height: 1080 },
-        acceptDownloads: true,
-        recordVideo:
-          process.env.RECORD_VIDEO === "true"
-            ? {
-                dir: path.join(process.cwd(), "logs", "videos"),
-              }
-            : undefined,
-      });
-
-      this.browser = this.context.browser();
+      const browser = await chromium.connectOverCDP(
+        "ws://127.0.0.1:28288/devtools/browser/44a4e720-3136-411a-a41e-7d888137d3c8"
+      );
+      this.browser = browser;
+      this.context = browser.contexts()[0] || await browser.newContext();
     }
 
     return this.context;
