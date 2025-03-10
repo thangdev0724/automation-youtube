@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+cookies.json
+/logs/screenshots/*
+/src/config/*
+!src/config/.gitkeep
