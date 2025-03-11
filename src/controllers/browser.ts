@@ -93,18 +93,9 @@ export class BrowserManager {
 
   async close(): Promise<void> {
     await axios.get("http://localhost:4980/api/v1/profiles/171656/close");
-    if (this.context) {
-      logger.info("Closing browser context");
-      await this.context.close();
-      this.context = null;
-      this.page = null;
-    }
-
-    if (this.browser) {
-      logger.info("Closing browser");
-      await this.browser.close();
-      this.browser = null;
-    }
+    this.context = null;
+    this.browser = null;
+    this.page = null;
   }
 
   async clearCookiesAndStorage(): Promise<void> {
