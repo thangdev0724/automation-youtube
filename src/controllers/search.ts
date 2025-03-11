@@ -1,16 +1,11 @@
 // src/controllers/search.ts
 import { Page } from "playwright";
+import { SEARCH_INPUT } from "../constants/selector";
 import { Session } from "../models/session";
+import { ISearchStateConfig } from "../types/config";
 import { logger } from "../utils/logger";
 import { probabilityCheck, randomDelay, randomInt } from "../utils/random";
 import { BrowserManager } from "./browser";
-import { ISessionConfig } from "../types/session";
-import { ISearchStateConfig } from "../types/config";
-
-const SEARCH_SELECTORS = {
-  searchInput:
-    "#center > yt-searchbox > div.ytSearchboxComponentInputBox > form > input",
-};
 
 export class SearchController {
   private browserManager: BrowserManager;
@@ -28,7 +23,7 @@ export class SearchController {
       const page = await this.browserManager.getCurrentPage();
       logger.info("Navigating to search");
       // Tìm và click vào thanh tìm kiếm
-      await page.click(SEARCH_SELECTORS.searchInput);
+      await page.click(SEARCH_INPUT);
       await randomDelay(500, 1500);
 
       return true;
@@ -52,7 +47,7 @@ export class SearchController {
     try {
       logger.info("Performing YouTube search");
       const page = await this.browserManager.getCurrentPage();
-      this.searchTerms = config.searchKeywords
+      this.searchTerms = config.searchKeywords;
       // Cập nhật thời gian hoạt động của phiên
       session.updateActivity();
 
@@ -100,11 +95,16 @@ export class SearchController {
     logger.info(`Searching for: ${searchTerm}`);
 
     // Đảm bảo đang focus vào ô tìm kiếm
-    await page.click(SEARCH_SELECTORS.searchInput);
+    await page.click(SEARCH_INPUT);
     await randomDelay(500, 1000);
 
     // Xóa nội dung thanh tìm kiếm
-    await page.keyboard.press("Control+a");
+    const isMac = process.platform === "darwin";
+    if (isMac) {
+      await page.keyboard.press("Meta+a");
+    } else {
+      await page.keyboard.press("Control+a");
+    }
     await page.keyboard.press("Delete");
     await randomDelay(500, 1000);
 
@@ -395,7 +395,7 @@ export class SearchController {
       const page = await this.browserManager.getCurrentPage();
 
       // Nhập một phần từ khóa để xem gợi ý
-      await page.click(SEARCH_SELECTORS.searchInput);
+      await page.click(SEARCH_INPUT);
       await page.keyboard.type(partialTerm, { delay: randomInt(50, 150) });
 
       // Đợi gợi ý xuất hiện

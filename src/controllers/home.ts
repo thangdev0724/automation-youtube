@@ -4,6 +4,7 @@ import { logger } from "../utils/logger";
 import { randomDelay, probabilityCheck, randomInt } from "../utils/random";
 import { Session } from "../models/session";
 import { ISessionConfig } from "../types/session";
+import { IHomeStateConfig } from "../types/config";
 
 export class HomeController {
   private browserManager: BrowserManager;
@@ -34,7 +35,7 @@ export class HomeController {
    */
   async browseHomePage(
     session: Session,
-    config: ISessionConfig
+    config: IHomeStateConfig
   ): Promise<{ action: string; data?: any }> {
     try {
       logger.info("Browsing YouTube home page");

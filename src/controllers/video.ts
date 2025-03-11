@@ -1,4 +1,3 @@
-// src/controllers/video.ts
 import { BrowserManager } from "./browser";
 import { logger } from "../utils/logger";
 import {
@@ -9,7 +8,17 @@ import {
 } from "../utils/random";
 import { Session } from "../models/session";
 import { Page } from "playwright";
-import { IWatchVideoConfig } from "../types/config";
+import {
+  IDetermineActionConfig,
+  IWatchVideoConfig,
+  IWatchVideoResult,
+} from "../types/config";
+import {
+  CHANNEL_SELECTOR,
+  HOME_SELECTOR,
+  SEARCH_INPUT,
+  VIDEO_STREAM_SELECTOR,
+} from "../constants/selector";
 
 export class VideoController {
   private browserManager: BrowserManager;
@@ -26,7 +35,7 @@ export class VideoController {
   async watchVideo(
     session: Session,
     config: IWatchVideoConfig
-  ): Promise<{ action: string; data?: any }> {
+  ): Promise<{ action: string; data?: IWatchVideoResult }> {
     try {
       logger.info("Starting to watch YouTube video");
       const page = await this.browserManager.getCurrentPage();
@@ -38,7 +47,7 @@ export class VideoController {
       session.incrementVideosWatched();
 
       // Lấy thông tin video
-      const videoInfo = await this.getVideoInfo(page);
+      let videoInfo = await this.getVideoInfo(page);
       logger.info(
         `Watching video: "${videoInfo.title}" by ${videoInfo.channelName}`
       );
@@ -46,9 +55,10 @@ export class VideoController {
       // 1. Xử lý quảng cáo
       await this.handleAds(page, config);
 
+      videoInfo = await this.getVideoInfo(page);
       // 2. Điều chỉnh âm lượng (nếu cần)
       if (probabilityCheck(config.adjustVolume)) {
-        await this.adjustVolume(page);
+        await this.adjustVolume(page, config);
       }
 
       // 3. Xem video
@@ -62,9 +72,10 @@ export class VideoController {
       // Trả về kết quả xem video
       return watchResult;
     } catch (error) {
+      console.log("===== ERROR WATCHING VIDEO =====", error);
       logger.error("Error watching video", { error });
       await this.browserManager.saveScreenshot("video_error");
-      return { action: "error", data: { error } };
+      return { action: "error", data: {} };
     }
   }
 
@@ -107,19 +118,11 @@ export class VideoController {
 
       // Lấy thời lượng video
       const duration = await page.evaluate(() => {
-        const timeText =
-          document.querySelector(".ytp-time-duration")?.textContent;
-        if (!timeText) return 300; // Default value
+        const time = document.querySelector(
+          "#movie_player > div.html5-video-container > video"
+        ) as HTMLVideoElement;
 
-        const parts = timeText.split(":").map(Number);
-        if (parts.length === 2) {
-          // MM:SS format
-          return parts[0] * 60 + parts[1];
-        } else if (parts.length === 3) {
-          // HH:MM:SS format
-          return parts[0] * 3600 + parts[1] * 60 + parts[2];
-        }
-        return 300; // Default
+        return time.duration || 0;
       });
 
       // Lấy số lượt like (nếu có thể)
@@ -174,10 +177,7 @@ export class VideoController {
       if (skipButton && probabilityCheck(config.skipAd)) {
         // Đợi đủ thời gian để nút skip xuất hiện (thường là 5 giây)
         logger.info(`Waiting ${config.skipAdDelay}s to skip ad`);
-        await randomDelay(
-          config.skipAdDelay * 1000,
-          (config.skipAdDelay + 1) * 1000
-        );
+        await delay(config.skipAdDelay * 1000);
 
         // Click nút skip
         await skipButton.click();
@@ -202,41 +202,60 @@ export class VideoController {
       hasAds: false,
       duration: 0,
     };
-    await page.evaluate(() => {
+    const hasAds = await page.evaluate(() => {
       const el = document.querySelector(
         "#movie_player > div.video-ads.ytp-ad-module"
       );
       if (el && el?.hasChildNodes()) {
-        const videoElement = document.querySelector(
-          "#movie_player > div.html5-video-container > video"
-        );
-        const duration = videoElement
-          ? (videoElement as HTMLVideoElement).duration
-          : 0;
-        result.duration = duration;
-        result.hasAds = true;
+        return true;
       }
-      console.log("Không có quảng cáo");
+      return false;
     });
 
-    await randomDelay(1000, 3000);
+    if (hasAds) {
+      const duration = await page.evaluate(() => {
+        const videoElement = document.querySelector(
+          "#movie_player > div.html5-video-container > video"
+        ) as HTMLVideoElement;
 
-    console.log("Kiểm tra quảng cáo kết thúc");
+        return videoElement.duration || 0;
+      });
 
-    return result;
+      result.duration = duration;
+    }
+
+    return {
+      ...result,
+      hasAds,
+    };
   }
 
   /**
    * Điều chỉnh âm lượng
    */
-  private async adjustVolume(page: any): Promise<void> {
-    logger.info("Adjusting volume");
+  private async adjustVolume(
+    page: Page,
+    config: IWatchVideoConfig
+  ): Promise<void> {
+    logger.info("Adjusting volume " + config.isVolumeIncreasing);
 
     // Quyết định tăng hay giảm âm lượng
-    const increaseVolume = Math.random() > 0.5;
-
+    const increaseVolume = config.isVolumeIncreasing === "TRUE" ? true : false;
+    console.log("Giá trị inceaseVolum là: ", increaseVolume);
     // Số lần nhấn phím mũi tên lên/xuống
     const adjustCount = randomInt(1, 4);
+
+    // check video is muted
+    const videoLocator = page.locator(VIDEO_STREAM_SELECTOR);
+    const isMuted = await videoLocator.evaluate(
+      (video) => (video as HTMLVideoElement).muted
+    );
+    console.log("video có bị muted không? ", isMuted ? "có" : "không");
+    if (isMuted) {
+      await videoLocator.evaluate((video) => {
+        (video as HTMLVideoElement).muted = false;
+      });
+    }
 
     for (let i = 0; i < adjustCount; i++) {
       if (increaseVolume) {
@@ -255,15 +274,12 @@ export class VideoController {
     page: Page,
     session: Session,
     videoInfo: any,
-    config: any
+    config: IWatchVideoConfig
   ): Promise<{ action: string; data?: any }> {
     logger.info("Viewing video content");
 
     // Quyết định xem bao nhiêu phần trăm video
-    const watchPercentage = randomInt(
-      config.minWatchPercentage,
-      config.watchToEnd
-    );
+    const watchPercentage = config.watchPercentage;
     const watchDuration = Math.floor(
       (videoInfo.duration * watchPercentage) / 100
     );
@@ -309,7 +325,6 @@ export class VideoController {
         continuousWatchingSegment * 1000 + 1000
       );
       watchedTime += continuousWatchingSegment;
-
       // Quyết định hành vi tiếp theo dựa trên xác suất
       if (watchedTime < watchDuration) {
         // Tạo một mảng các hành vi có thể xảy ra và xác suất tương ứng
@@ -323,28 +338,15 @@ export class VideoController {
           { name: "continueWatching", probability: config.continueWatching },
         ];
 
-        // Chuẩn hóa xác suất để tổng = 100%
-        const totalProbability = behaviors.reduce(
-          (sum, b) => sum + b.probability,
-          0
-        );
-        behaviors.forEach(
-          (b) => (b.probability = (b.probability / totalProbability) * 100)
-        );
-
         // Chọn hành vi
-        let randomValue = Math.random() * 100;
-        let cumulativeProbability = 0;
         let selectedBehavior = "continueWatching";
 
         for (const behavior of behaviors) {
-          cumulativeProbability += behavior.probability;
-          if (randomValue <= cumulativeProbability) {
+          if (probabilityCheck(behavior.probability)) {
             selectedBehavior = behavior.name;
             break;
           }
         }
-
         // Thực hiện hành vi đã chọn
         switch (selectedBehavior) {
           case "interestingSection":
@@ -380,6 +382,7 @@ export class VideoController {
             break;
 
           case "continueWatching":
+            console.log("continue watching");
           default:
             // Tiếp tục xem bình thường
             break;
@@ -394,7 +397,8 @@ export class VideoController {
     );
 
     // Đã xem đủ tỷ lệ video tối thiểu để cân nhắc tương tác?
-    if ((watchedTime / videoInfo.duration) * 100 >= config.minWatchPercentage) {
+    if (probabilityCheck(config.minWatchPercentage)) {
+      console.log("vào đây đã nào ..... =>>> videoCompleted");
       return {
         action: "videoCompleted",
         data: {
@@ -407,6 +411,7 @@ export class VideoController {
         },
       };
     } else {
+      console.log("vào đây đã nào ..... =>>> videoPartiallyWatched");
       return {
         action: "videoPartiallyWatched",
         data: {
@@ -443,6 +448,7 @@ export class VideoController {
         config.pauseDuration * 1000,
         (config.pauseDuration + 1) * 1000
       );
+      logger.info(`Continue video at time ${currentTime}s`);
 
       // Tiếp tục phát
       await page.click(".ytp-play-button");
@@ -514,18 +520,7 @@ export class VideoController {
    */
   async decideInteractions(
     session: Session,
-    config: {
-      likeVideo: number; // Tỷ lệ thực hiện like video
-      commentVideo: number; // Tỷ lệ thực hiện bình luận video
-      subscribeChannel: number; // Tỷ lệ thực hiện đăng ký kênh
-      noInteraction: number; // Tỷ lệ không tương tác
-      hoverLikeDelay: number; // Thời gian hover trước khi click like (giây)
-      editComment: number; // Tỷ lệ chỉnh sửa bình luận
-      completeComment: number; // Tỷ lệ hoàn thành bình luận không chỉnh sửa
-      hoverSubscribeDelay: number; // Thời gian hover trước khi click subscribe (giây)
-      enableNotifications: number; // Tỷ lệ bật thông báo sau khi đăng ký kênh
-      skipNotifications: number; // Tỷ lệ không bật thông báo sau khi đăng ký kênh
-    },
+    config: IWatchVideoConfig,
     videoInfo: any
   ): Promise<{
     liked: boolean;
@@ -595,11 +590,10 @@ export class VideoController {
   private async performLikeVideo(page: any, config: any): Promise<boolean> {
     try {
       logger.info("Attempting to like video");
-
+      const btnSelector =
+        "#top-level-buttons-computed > segmented-like-dislike-button-view-model > yt-smartimation > div > div > like-button-view-model > toggle-button-view-model > button-view-model > button";
       // Tìm nút like
-      const likeButton = await page.$(
-        '.ytd-toggle-button-renderer.style-scope.ytd-menu-renderer button[aria-label*="like"]'
-      );
+      const likeButton = await page.$(btnSelector);
 
       if (!likeButton) {
         logger.warn("Like button not found");
@@ -722,7 +716,7 @@ export class VideoController {
    */
   private async performSubscribeChannel(
     page: any,
-    config: any
+    config: IWatchVideoConfig
   ): Promise<boolean> {
     try {
       logger.info("Attempting to subscribe to channel");
@@ -807,13 +801,7 @@ export class VideoController {
    */
   async decideNextAction(
     session: Session,
-    config: {
-      watchSuggested: number; // Tỷ lệ chọn video đề xuất
-      backToSearchResults: number; // Tỷ lệ quay lại kết quả tìm kiếm
-      newSearch: number; // Tỷ lệ thực hiện tìm kiếm mới
-      viewCurrentChannel: number; // Tỷ lệ xem kênh hiện tại
-      endSessionEarly: number; // Tỷ lệ kết thúc phiên ngay
-    },
+    config: IDetermineActionConfig,
     videoInfo: any
   ): Promise<{ action: string; data?: any }> {
     try {
@@ -847,23 +835,11 @@ export class VideoController {
         { name: "endSessionEarly", probability: config.endSessionEarly },
       ];
 
-      // Chuẩn hóa xác suất để tổng = 100%
-      const totalProbability = actions.reduce(
-        (sum, a) => sum + a.probability,
-        0
-      );
-      actions.forEach(
-        (a) => (a.probability = (a.probability / totalProbability) * 100)
-      );
-
       // Chọn hành động
-      let randomValue = Math.random() * 100;
-      let cumulativeProbability = 0;
       let selectedAction = "watchSuggested";
 
       for (const action of actions) {
-        cumulativeProbability += action.probability;
-        if (randomValue <= cumulativeProbability) {
+        if (probabilityCheck(action.probability)) {
           selectedAction = action.name;
           break;
         }
@@ -911,7 +887,10 @@ export class VideoController {
 
       // Cuộn xuống để xem các video đề xuất
       await page.evaluate(() => {
-        window.scrollBy(0, 500);
+        window.scrollBy({
+          top: 500,
+          behavior: "smooth",
+        });
       });
       await randomDelay(1000, 2000);
 
@@ -964,7 +943,7 @@ export class VideoController {
    * Xử lý việc quay lại kết quả tìm kiếm
    */
   private async handleBackToSearchResults(
-    page: any
+    page: Page
   ): Promise<{ action: string; data?: any }> {
     try {
       logger.info("Going back to search results");
@@ -1001,14 +980,14 @@ export class VideoController {
    * Xử lý việc thực hiện tìm kiếm mới
    */
   private async handleNewSearch(
-    page: any
+    page: Page
   ): Promise<{ action: string; data?: any }> {
     try {
       logger.info("Initiating new search");
 
       // Click vào logo YouTube để về trang chủ
       try {
-        await page.click("a#logo");
+        await page.click(HOME_SELECTOR);
         await randomDelay(2000, 4000);
       } catch (error) {
         // Nếu không click được logo, điều hướng trực tiếp
@@ -1020,7 +999,7 @@ export class VideoController {
       }
 
       // Click vào thanh tìm kiếm
-      await page.click("input#search");
+      await page.click(SEARCH_INPUT);
       await randomDelay(500, 1500);
 
       return { action: "search" };
@@ -1041,7 +1020,7 @@ export class VideoController {
       logger.info("Viewing current channel");
 
       // Click vào tên kênh
-      const channelLink = await page.$("#channel-name a");
+      const channelLink = await page.$(CHANNEL_SELECTOR);
       if (!channelLink) {
         logger.warn("Channel link not found");
         return { action: "watchSuggested" };
@@ -1058,6 +1037,7 @@ export class VideoController {
         },
       };
     } catch (error) {
+      console.log("===== ERROR VIEWING CHANNEL =====", error);
       logger.error("Error viewing channel", { error });
       return { action: "watchSuggested" };
     }

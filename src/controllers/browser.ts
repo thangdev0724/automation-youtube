@@ -3,7 +3,6 @@ import { logger } from "../utils/logger";
 import * as dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
-import axios from "axios";
 
 dotenv.config();
 
@@ -13,11 +12,10 @@ export class BrowserManager {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private userDataDir: string;
-  private endpointURL: string = "";
 
   private constructor() {
     // Tạo thư mục lưu user data nếu chưa tồn tại
-    this.userDataDir = `../config/Profile1`;
+    this.userDataDir = `/Users/thangdev/Library/Application Support/Google/Chrome/Profile1`;
   }
 
   public static getInstance(): BrowserManager {
@@ -33,16 +31,26 @@ export class BrowserManager {
       slowMo: parseInt(process.env.SLOW_MO || "50", 10),
     }
   ): Promise<BrowserContext> {
-    await this.loadProfile();
     if (!this.context) {
       logger.info("Launching persistent browser context", {
         headless: options.headless,
         userDataDir: this.userDataDir,
       });
 
-      const browser = await chromium.connectOverCDP(this.endpointURL);
-      this.browser = browser;
-      this.context = browser.contexts()[0] || (await browser.newContext());
+      this.context = await chromium.launchPersistentContext(this.userDataDir, {
+        headless: options.headless,
+        slowMo: options.slowMo,
+        viewport: { width: 1920, height: 1080 },
+        acceptDownloads: true,
+        recordVideo:
+          process.env.RECORD_VIDEO === "true"
+            ? {
+                dir: path.join(process.cwd(), "logs", "videos"),
+              }
+            : undefined,
+      });
+
+      this.browser = this.context.browser();
     }
 
     return this.context;
@@ -92,7 +100,6 @@ export class BrowserManager {
   }
 
   async close(): Promise<void> {
-    await axios.get("http://localhost:4980/api/v1/profiles/171656/close");
     if (this.context) {
       logger.info("Closing browser context");
       await this.context.close();
@@ -184,20 +191,6 @@ export class BrowserManager {
     } catch (error) {
       logger.error("Error loading cookies from file", { error });
       return false;
-    }
-  }
-
-  async loadProfile() {
-    try {
-      const response = await axios.get(
-        "http://localhost:4980/api/v1/profiles/171656/open"
-      );
-
-      if (response.data && response.data.status) {
-        this.endpointURL = response.data.data.ws;
-      }
-    } catch (error) {
-      logger.info("Lỗi loading profile mkt", { error });
     }
   }
 }
