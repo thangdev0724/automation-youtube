@@ -1,9 +1,15 @@
 // src/controllers/video.ts
 import { BrowserManager } from "./browser";
 import { logger } from "../utils/logger";
-import { randomDelay, probabilityCheck, randomInt } from "../utils/random";
+import {
+  randomDelay,
+  probabilityCheck,
+  randomInt,
+  delay,
+} from "../utils/random";
 import { Session } from "../models/session";
 import { Page } from "playwright";
+import { IWatchVideoConfig } from "../types/config";
 
 export class VideoController {
   private browserManager: BrowserManager;
@@ -19,24 +25,7 @@ export class VideoController {
    */
   async watchVideo(
     session: Session,
-    config: {
-      adProbability: number; // Tỷ lệ xuất hiện quảng cáo
-      noAdProbability: number; // Tỷ lệ không có quảng cáo
-      skipAd: number; // Tỷ lệ bỏ qua quảng cáo
-      skipAdDelay: number; // Thời gian chờ trước khi bỏ qua quảng cáo (giây)
-      adjustVolume: number; // Tỷ lệ điều chỉnh âm lượng
-      watchContinuously: number; // Tỷ lệ xem video liên tục
-      interestingSection: number; // Tỷ lệ phát hiện đoạn hay
-      boringSection: number; // Tỷ lệ phát hiện đoạn chán
-      tabInactive: number; // Tỷ lệ chuyển tab không hoạt động
-      continueWatching: number; // Tỷ lệ tiếp tục xem thông thường
-      watchToEnd: number; // Tỷ lệ xem video đến cuối
-      pauseDuration: number; // Thời gian tạm dừng khi phát hiện đoạn hay (giây)
-      rewindTime: number; // Thời gian tua lại khi phát hiện đoạn hay (giây)
-      skipTime: number; // Thời gian tua đi khi phát hiện đoạn chán (giây)
-      minWatchPercentage: number; // Tỷ lệ xem tối thiểu để cân nhắc tương tác
-      videoLoadingTime: number; // Thời gian tải video (ms)
-    }
+    config: IWatchVideoConfig
   ): Promise<{ action: string; data?: any }> {
     try {
       logger.info("Starting to watch YouTube video");
@@ -52,12 +41,6 @@ export class VideoController {
       const videoInfo = await this.getVideoInfo(page);
       logger.info(
         `Watching video: "${videoInfo.title}" by ${videoInfo.channelName}`
-      );
-
-      // Đợi video tải với thời gian ngẫu nhiên
-      await randomDelay(
-        Math.max(100, config.videoLoadingTime - 100),
-        config.videoLoadingTime + 100
       );
 
       // 1. Xử lý quảng cáo
@@ -176,19 +159,19 @@ export class VideoController {
   /**
    * Xử lý quảng cáo trước hoặc trong video
    */
-  private async handleAds(page: any, config: any): Promise<void> {
+  private async handleAds(
+    page: Page,
+    config: IWatchVideoConfig
+  ): Promise<void> {
     // Xác định có quảng cáo không theo xác suất
-    const hasAd = probabilityCheck(config.adProbability);
+    const ads = await this.checkForAds(page);
 
-    if (hasAd) {
+    if (ads.hasAds) {
       logger.info("Advertisement detected");
 
       // Kiểm tra xem có nút skip quảng cáo không
-      const hasSkipButton = await page.evaluate(() => {
-        return document.querySelector(".ytp-ad-skip-button") !== null;
-      });
-
-      if (hasSkipButton && probabilityCheck(config.skipAd)) {
+      const skipButton = await page.$("#skip-button\\:2");
+      if (skipButton && probabilityCheck(config.skipAd)) {
         // Đợi đủ thời gian để nút skip xuất hiện (thường là 5 giây)
         logger.info(`Waiting ${config.skipAdDelay}s to skip ad`);
         await randomDelay(
@@ -197,18 +180,50 @@ export class VideoController {
         );
 
         // Click nút skip
-        await page.click(".ytp-ad-skip-button");
+        await skipButton.click();
         logger.info("Ad skipped");
       } else {
         // Xem toàn bộ quảng cáo
         logger.info("Watching full advertisement");
 
-        // Đợi quảng cáo kết thúc (giả sử quảng cáo kéo dài từ 15-30 giây)
-        await randomDelay(15000, 30000);
+        await delay(ads.duration);
       }
     } else {
       logger.info("No advertisement");
     }
+  }
+
+  private async checkForAds(page: Page): Promise<{
+    hasAds: boolean;
+    duration: number;
+  }> {
+    console.log("Đang kiểm tra quảng cáo...");
+    const result = {
+      hasAds: false,
+      duration: 0,
+    };
+    await page.evaluate(() => {
+      const el = document.querySelector(
+        "#movie_player > div.video-ads.ytp-ad-module"
+      );
+      if (el && el?.hasChildNodes()) {
+        const videoElement = document.querySelector(
+          "#movie_player > div.html5-video-container > video"
+        );
+        const duration = videoElement
+          ? (videoElement as HTMLVideoElement).duration
+          : 0;
+        result.duration = duration;
+        result.hasAds = true;
+      }
+      console.log("Không có quảng cáo");
+    });
+
+    await randomDelay(1000, 3000);
+
+    console.log("Kiểm tra quảng cáo kết thúc");
+
+    return result;
   }
 
   /**
@@ -410,8 +425,8 @@ export class VideoController {
    * Xử lý khi phát hiện đoạn hay
    */
   private async handleInterestingSection(
-    page: any,
-    config: any,
+    page: Page,
+    config: IWatchVideoConfig,
     currentTime: number
   ): Promise<void> {
     logger.info("Interesting part detected");
@@ -450,7 +465,10 @@ export class VideoController {
   /**
    * Xử lý khi phát hiện đoạn chán
    */
-  private async handleBoringSection(page: any, config: any): Promise<number> {
+  private async handleBoringSection(
+    page: any,
+    config: IWatchVideoConfig
+  ): Promise<number> {
     const skipAmount = config.skipTime;
     logger.info(`Boring part detected, skipping forward ${skipAmount}s`);
 
@@ -470,7 +488,7 @@ export class VideoController {
    */
   private async handleTabInactive(
     session: Session,
-    config: any
+    config: IWatchVideoConfig
   ): Promise<{ exceedsIdle: boolean }> {
     logger.info("Tab becomes inactive");
 

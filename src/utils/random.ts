@@ -19,3 +19,7 @@ export async function randomDelay(min: number, max: number): Promise<void> {
   const delay = randomInt(min, max);
   await new Promise((resolve) => setTimeout(resolve, delay));
 }
+
+export async function delay(time: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, time));
+}

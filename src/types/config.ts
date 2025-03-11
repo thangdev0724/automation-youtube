@@ -14,3 +14,18 @@ export interface ISearchStateConfig {
   searchKeywords: string[];
   specificKeyword: string;
 }
+
+export interface IWatchVideoConfig {
+  skipAd: number;
+  skipAdDelay: number;
+  adjustVolume: number;
+  interestingSection: number;
+  boringSection: number;
+  tabInactive: number;
+  continueWatching: number;
+  watchToEnd: number;
+  pauseDuration: number;
+  rewindTime: number;
+  skipTime: number;
+  minWatchPercentage: number;
+}
