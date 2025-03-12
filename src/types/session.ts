@@ -75,4 +75,11 @@ export interface ISessionConfig {
   createLogFile: boolean;
   logFilePath: string;
   sheetUpdateFrequency: "afterSession" | string;
+
+  finishSearchToHome: number;
+  finishSearchToEnd: number;
+  finishSearchToSearch: number;
+  endHomeBrowsingToSearch: number;
+  endHomeBrowsingToBrowsing: number;
+  endHomeBrowsingToEnd: number;
 }

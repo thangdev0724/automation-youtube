@@ -4,5 +4,6 @@ dist/
 *.log
 cookies.json
 /logs/screenshots/*
+/logs/reports/*
 /src/config/*
 !src/config/.gitkeep

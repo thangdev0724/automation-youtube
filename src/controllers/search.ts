@@ -4,7 +4,8 @@ import { SEARCH_INPUT } from "../constants/selector";
 import { Session } from "../models/session";
 import { ISearchStateConfig } from "../types/config";
 import { logger } from "../utils/logger";
-import { probabilityCheck, randomDelay, randomInt } from "../utils/random";
+import { checkProbability } from "../utils/probability-helper";
+import { randomDelay, randomInt } from "../utils/random";
 import { BrowserManager } from "./browser";
 
 export class SearchController {
@@ -83,7 +84,7 @@ export class SearchController {
   /**
    * Thực hiện việc nhập từ khóa tìm kiếm
    */
-  private async executeSearchInput(
+  async executeSearchInput(
     page: Page,
     specificTerm?: string,
     correctSearchTypo: number = 15
@@ -114,7 +115,7 @@ export class SearchController {
     }
 
     // Xác suất sửa lỗi đánh máy
-    if (probabilityCheck(correctSearchTypo)) {
+    if (checkProbability(correctSearchTypo, "Search", "correctSearchTypo")) {
       logger.info("Correcting typo in search");
       // Xóa 1-3 ký tự cuối và gõ lại
       const charsToDelete = randomInt(1, 3);
@@ -192,7 +193,7 @@ export class SearchController {
       await randomDelay(1000, 3000);
 
       // Xác suất hover vào thumbnail
-      if (probabilityCheck(config.hoverThumbnail)) {
+      if (checkProbability(config.hoverThumbnail, "Search", "hoverThumbnail")) {
         logger.info("Hovering over search result thumbnail");
 
         // Lấy danh sách kết quả tìm kiếm
@@ -215,7 +216,13 @@ export class SearchController {
           logger.info(
             "loaded config clickVideoAfterHover" + config.clickVideoAfterHover
           );
-          if (probabilityCheck(config.clickVideoAfterHover)) {
+          if (
+            checkProbability(
+              config.clickVideoAfterHover,
+              "Search",
+              "clickVideoAfterHover"
+            )
+          ) {
             logger.info("Clicking on search result after hover");
 
             // Lấy tiêu đề video trước khi click
@@ -233,7 +240,9 @@ export class SearchController {
             await randomDelay(2000, 4000);
 
             // Mô phỏng tỷ lệ chuyển từ search sang video
-            if (probabilityCheck(config.searchToVideo)) {
+            if (
+              checkProbability(config.searchToVideo, "Search", "searchToVideo")
+            ) {
               return {
                 action: "watchVideo",
                 data: {
@@ -250,7 +259,13 @@ export class SearchController {
           }
 
           // Nếu không click, xác suất tiếp tục cuộn
-          if (probabilityCheck(config.continueScrollAfterHover)) {
+          if (
+            checkProbability(
+              config.continueScrollAfterHover,
+              "Search",
+              "continueScrollAfterHover"
+            )
+          ) {
             logger.info("Continuing to scroll after hover");
             continue;
           } else {
@@ -261,15 +276,21 @@ export class SearchController {
         }
       } else {
         // Nếu không hover, xác suất cuộn tiếp
-        if (probabilityCheck(config.continueScrollResults)) {
+        if (
+          checkProbability(
+            config.continueScrollResults,
+            "Search",
+            "continueScrollResults"
+          )
+        ) {
           // Tiếp tục vòng lặp cuộn
           continue;
         } else {
           // Các lựa chọn khác: kết thúc tìm kiếm, cuộn lên, v.v.
-          if (probabilityCheck(config.endSearch)) {
+          if (checkProbability(config.endSearch, "Search", "endSearch")) {
             logger.info("Ending search while scrolling");
             break;
-          } else if (probabilityCheck(config.scrollUp)) {
+          } else if (checkProbability(config.scrollUp, "Search", "scrollUp")) {
             logger.info("Scrolling up in search results");
             await page.evaluate(() => {
               window.scrollBy({
@@ -280,7 +301,13 @@ export class SearchController {
             await randomDelay(1000, 2000);
 
             // Sau khi cuộn lên, xác suất hover
-            if (probabilityCheck(config.hoverAfterScrollUp)) {
+            if (
+              checkProbability(
+                config.hoverAfterScrollUp,
+                "Search",
+                "hoverAfterScrollUp"
+              )
+            ) {
               // Quay lại logic hover ở trên
               const searchResults = await page.$$("ytd-video-renderer");
               if (searchResults.length > 0) {
@@ -292,7 +319,13 @@ export class SearchController {
                 logger.info("Loaded config clickVideoAfterHover", {
                   clickVideoAfterHover: config.clickVideoAfterHover,
                 });
-                if (probabilityCheck(config.clickVideoAfterHover)) {
+                if (
+                  checkProbability(
+                    config.clickVideoAfterHover,
+                    "Search",
+                    "clickVideoAfterHover"
+                  )
+                ) {
                   logger.info(
                     "Clicking on search result after scroll up and hover"
                   );
@@ -314,14 +347,26 @@ export class SearchController {
                   };
                 }
               }
-            } else if (probabilityCheck(config.continueScrollAfterScrollUp)) {
+            } else if (
+              checkProbability(
+                config.continueScrollAfterScrollUp,
+                "Search",
+                "continueScrollAfterScrollUp"
+              )
+            ) {
               // Tiếp tục cuộn sau khi cuộn lên
               continue;
             } else {
               // Kết thúc sau khi cuộn lên
               break;
             }
-          } else if (probabilityCheck(config.continueScrollAgain)) {
+          } else if (
+            checkProbability(
+              config.continueScrollAgain,
+              "Search",
+              "continueScrollAgain"
+            )
+          ) {
             // Tiếp tục cuộn lại
             continue;
           } else {
@@ -333,7 +378,7 @@ export class SearchController {
     }
 
     // Khi kết thúc duyệt kết quả tìm kiếm, quyết định hành động tiếp theo
-    if (probabilityCheck(config.searchToVideo)) {
+    if (checkProbability(config.searchToVideo, "Search", "searchToVideo")) {
       // Chọn một video ngẫu nhiên từ kết quả
       logger.info("Selecting random video from search results");
       const results = await page.$$("ytd-video-renderer");
@@ -366,7 +411,9 @@ export class SearchController {
           },
         };
       }
-    } else if (probabilityCheck(config.searchToHome)) {
+    } else if (
+      checkProbability(config.searchToHome, "Search", "searchToHome")
+    ) {
       // Quay về trang chủ
       logger.info("Returning to home page from search");
 

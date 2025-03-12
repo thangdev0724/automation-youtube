@@ -12,7 +12,8 @@ import {
 import { Session } from "../models/session";
 import { IChannelConfig } from "../types/config";
 import { logger } from "../utils/logger";
-import { probabilityCheck, randomDelay, randomInt } from "../utils/random";
+import { checkProbability } from "../utils/probability-helper";
+import { randomDelay, randomInt } from "../utils/random";
 import { BrowserManager } from "./browser";
 
 export class ChannelController {
@@ -47,7 +48,9 @@ export class ChannelController {
       await this.loadChannelPage(page, channelData?.channelUrl);
 
       // 2. Xem thông tin kênh hoặc danh sách video (dựa trên xác suất)
-      if (probabilityCheck(config.viewChannelInfo)) {
+      if (
+        checkProbability(config.viewChannelInfo, "Channel", "viewChannelInfo")
+      ) {
         await this.viewChannelInfo(page);
       } else {
         await this.viewVideosList(page);
@@ -119,7 +122,7 @@ export class ChannelController {
   /**
    * Xem thông tin kênh
    */
-  private async viewChannelInfo(page: Page): Promise<void> {
+  async viewChannelInfo(page: Page): Promise<void> {
     logger.info("Viewing channel information");
 
     // Cuộn lên đầu trang để xem thông tin kênh
@@ -150,7 +153,7 @@ export class ChannelController {
   /**
    * Xem danh sách video
    */
-  private async viewVideosList(page: Page): Promise<void> {
+  async viewVideosList(page: Page): Promise<void> {
     logger.info("Viewing videos list");
 
     // Tìm tab Videos
@@ -232,7 +235,7 @@ export class ChannelController {
   /**
    * Cuộn xem video kênh và quyết định hành động tiếp theo
    */
-  private async browseChannelVideos(
+  async browseChannelVideos(
     page: Page,
     session: Session,
     config: IChannelConfig
@@ -271,7 +274,13 @@ export class ChannelController {
       // Quyết định hành động: chọn video, chuyển tab, hoặc rời khỏi kênh
 
       // 1. Chọn video từ kênh (70% khả năng)
-      if (probabilityCheck(config.selectChannelVideo)) {
+      if (
+        checkProbability(
+          config.selectChannelVideo,
+          "Channel",
+          "selectChannelVideo"
+        )
+      ) {
         // Chọn một video ngẫu nhiên từ danh sách
         const channelVideos = await page.$$(
           "ytd-grid-video-renderer, ytd-rich-item-renderer"
@@ -302,7 +311,9 @@ export class ChannelController {
           await randomDelay(2000, 4000);
 
           // Trả về action watchVideo theo xác suất channelToVideo
-          if (probabilityCheck(config.channelToVideo)) {
+          if (
+            checkProbability(config.channelToVideo, "Channel", "channelToVideo")
+          ) {
             return {
               action: "watchVideo",
               data: {
@@ -318,7 +329,9 @@ export class ChannelController {
         }
       }
       // 2. Chuyển tab kênh (20% khả năng)
-      else if (probabilityCheck(config.switchChannelTab)) {
+      else if (
+        checkProbability(config.switchChannelTab, "Channel", "switchChannelTab")
+      ) {
         await this.switchChannelTab(page);
       }
       // 3. Rời khỏi kênh (10% khả năng còn lại)
@@ -411,7 +424,7 @@ export class ChannelController {
     let selectedAction = actions[0].action;
 
     for (const action of actions) {
-      if (probabilityCheck(action.probability)) {
+      if (checkProbability(action.probability, "Channel", action.name)) {
         selectedAction = action.action;
         break;
       }

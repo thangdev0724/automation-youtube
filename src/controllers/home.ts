@@ -1,10 +1,10 @@
 // src/controllers/home.ts
-import { BrowserManager } from "./browser";
-import { logger } from "../utils/logger";
-import { randomDelay, probabilityCheck, randomInt } from "../utils/random";
 import { Session } from "../models/session";
-import { ISessionConfig } from "../types/session";
 import { IHomeStateConfig } from "../types/config";
+import { logger } from "../utils/logger";
+import { checkProbability } from "../utils/probability-helper";
+import { probabilityCheck, randomDelay, randomInt } from "../utils/random";
+import { BrowserManager } from "./browser";
 
 export class HomeController {
   private browserManager: BrowserManager;
@@ -45,7 +45,13 @@ export class HomeController {
       session.updateActivity();
 
       // Kiểm tra thông báo với xác suất đã cấu hình
-      if (probabilityCheck(config.checkNotifications)) {
+      if (
+        checkProbability(
+          config.checkNotifications,
+          "Home",
+          "checkNotifications"
+        )
+      ) {
         logger.info("Checking notifications");
         try {
           // Tìm kiếm nút thông báo
@@ -73,11 +79,11 @@ export class HomeController {
       logger.info("Giá trị homeToVideo: " + config.homeToVideo);
       logger.info("Giá trị clickHomeVideo: " + config.clickHomeVideo);
 
-      if (probabilityCheck(config.homeToSearch)) {
+      if (checkProbability(config.homeToSearch, "Home", "homeToSearch")) {
         return { action: "search" };
       }
 
-      if (probabilityCheck(config.homeToVideo)) {
+      if (checkProbability(config.homeToVideo, "Home", "homeToVideo")) {
         await this.playRandomVideo();
         return {
           action: "watchVideo",
@@ -109,7 +115,13 @@ export class HomeController {
           "Giá trị stopScrollingToWatchVideo: " +
             config.stopScrollingToWatchVideo
         );
-        if (probabilityCheck(config.stopScrollingToWatchVideo)) {
+        if (
+          checkProbability(
+            config.stopScrollingToWatchVideo,
+            "Home",
+            "stopScrollingToWatchVideo"
+          )
+        ) {
           logger.info("Pausing on video thumbnail");
 
           // Lấy danh sách thumbnails
@@ -133,7 +145,13 @@ export class HomeController {
             logger.info(
               "Giá trị homeVideoToSearch: " + config.homeVideoToSearch
             );
-            if (probabilityCheck(config.homeVideoToSearch)) {
+            if (
+              checkProbability(
+                config.homeVideoToSearch,
+                "Home",
+                "homeVideoToSearch"
+              )
+            ) {
               logger.info("Switching to search from home");
               const searchBox = await this.getHomePageElements().then(
                 (elements) => elements.searchBox
@@ -145,7 +163,9 @@ export class HomeController {
             }
 
             logger.info(" Giá trị clickHomeVideo: " + config.clickHomeVideo);
-            if (probabilityCheck(config.clickHomeVideo)) {
+            if (
+              checkProbability(config.clickHomeVideo, "Home", "clickHomeVideo")
+            ) {
               logger.info("Clicking on home page video");
 
               let videoTitle = "Unknown";
@@ -178,7 +198,9 @@ export class HomeController {
             return { action: "endHomeBrowsing" };
           }
         } else {
-          if (probabilityCheck(config.endHomeBrowsing)) {
+          if (
+            checkProbability(config.endHomeBrowsing, "Home", "endHomeBrowsing")
+          ) {
             logger.info("Ending home browsing while scrolling");
             return { action: "endHomeBrowsing" };
           }
@@ -199,9 +221,9 @@ export class HomeController {
 
       // Mặc định nếu đã cuộn hết mà không có quyết định cụ thể
       logger.info("Finished scrolling home page, deciding next action");
-      if (probabilityCheck(config.homeToSearch)) {
+      if (checkProbability(config.homeToSearch, "Home", "homeToSearch")) {
         return { action: "search" };
-      } else if (probabilityCheck(config.homeToVideo)) {
+      } else if (checkProbability(config.homeToVideo, "Home", "homeToVideo")) {
         this.playRandomVideo();
         return {
           action: "watchVideo",

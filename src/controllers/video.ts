@@ -19,6 +19,8 @@ import {
   SEARCH_INPUT,
   VIDEO_STREAM_SELECTOR,
 } from "../constants/selector";
+import { checkProbability } from "../utils/probability-helper";
+import enhancedLogger from "../utils/enhanced-logger";
 
 export class VideoController {
   private browserManager: BrowserManager;
@@ -57,7 +59,7 @@ export class VideoController {
 
       videoInfo = await this.getVideoInfo(page);
       // 2. Điều chỉnh âm lượng (nếu cần)
-      if (probabilityCheck(config.adjustVolume)) {
+      if (checkProbability(config.adjustVolume, "Video", "adjustVolume")) {
         await this.adjustVolume(page, config);
       }
 
@@ -174,7 +176,7 @@ export class VideoController {
 
       // Kiểm tra xem có nút skip quảng cáo không
       const skipButton = await page.$("#skip-button\\:2");
-      if (skipButton && probabilityCheck(config.skipAd)) {
+      if (skipButton && checkProbability(config.skipAd, "Video", "skipAd")) {
         // Đợi đủ thời gian để nút skip xuất hiện (thường là 5 giây)
         logger.info(`Waiting ${config.skipAdDelay}s to skip ad`);
         await delay(config.skipAdDelay * 1000);
@@ -247,9 +249,12 @@ export class VideoController {
 
     // check video is muted
     const videoLocator = page.locator(VIDEO_STREAM_SELECTOR);
-    const isMuted = await videoLocator.evaluate(
-      (video) => (video as HTMLVideoElement).muted
-    );
+    let isMuted = false;
+    if (videoLocator) {
+      isMuted = await videoLocator.evaluate(
+        (video) => (video as HTMLVideoElement).muted
+      );
+    }
     console.log("video có bị muted không? ", isMuted ? "có" : "không");
     if (isMuted) {
       await videoLocator.evaluate((video) => {
@@ -342,7 +347,7 @@ export class VideoController {
         let selectedBehavior = "continueWatching";
 
         for (const behavior of behaviors) {
-          if (probabilityCheck(behavior.probability)) {
+          if (checkProbability(behavior.probability, "Video", behavior.name)) {
             selectedBehavior = behavior.name;
             break;
           }
@@ -396,9 +401,19 @@ export class VideoController {
       )}%)`
     );
 
+    const percentageWatched =
+      Math.floor((watchedTime / videoInfo.duration) * 100) || 0;
+    const completedVid = percentageWatched <= config.minWatchPercentage;
+
     // Đã xem đủ tỷ lệ video tối thiểu để cân nhắc tương tác?
-    if (probabilityCheck(config.minWatchPercentage)) {
-      console.log("vào đây đã nào ..... =>>> videoCompleted");
+    enhancedLogger.logProbabilityCheck(
+      "Video",
+      config.minWatchPercentage,
+      percentageWatched,
+      completedVid,
+      "minWatchPercentage"
+    );
+    if (completedVid) {
       return {
         action: "videoCompleted",
         data: {
@@ -411,7 +426,6 @@ export class VideoController {
         },
       };
     } else {
-      console.log("vào đây đã nào ..... =>>> videoPartiallyWatched");
       return {
         action: "videoPartiallyWatched",
         data: {
@@ -429,7 +443,7 @@ export class VideoController {
   /**
    * Xử lý khi phát hiện đoạn hay
    */
-  private async handleInterestingSection(
+  async handleInterestingSection(
     page: Page,
     config: IWatchVideoConfig,
     currentTime: number
@@ -471,7 +485,7 @@ export class VideoController {
   /**
    * Xử lý khi phát hiện đoạn chán
    */
-  private async handleBoringSection(
+  async handleBoringSection(
     page: any,
     config: IWatchVideoConfig
   ): Promise<number> {
@@ -492,7 +506,7 @@ export class VideoController {
   /**
    * Xử lý khi tab không hoạt động
    */
-  private async handleTabInactive(
+  async handleTabInactive(
     session: Session,
     config: IWatchVideoConfig
   ): Promise<{ exceedsIdle: boolean }> {
@@ -544,7 +558,7 @@ export class VideoController {
       await randomDelay(1000, 2000);
 
       // 1. Like video
-      if (probabilityCheck(config.likeVideo)) {
+      if (checkProbability(config.likeVideo, "Video", "likeVideo")) {
         result.liked = await this.performLikeVideo(page, config);
         if (result.liked) {
           session.recordInteraction("likes");
@@ -552,7 +566,7 @@ export class VideoController {
       }
 
       // 2. Bình luận video
-      if (probabilityCheck(config.commentVideo)) {
+      if (checkProbability(config.commentVideo, "Video", "commentVideo")) {
         result.commented = await this.performCommentVideo(
           page,
           config,
@@ -564,7 +578,9 @@ export class VideoController {
       }
 
       // 3. Đăng ký kênh
-      if (probabilityCheck(config.subscribeChannel)) {
+      if (
+        checkProbability(config.subscribeChannel, "Video", "subscribeChannel")
+      ) {
         result.subscribed = await this.performSubscribeChannel(page, config);
         if (result.subscribed) {
           session.recordInteraction("subscribes");
@@ -671,7 +687,7 @@ export class VideoController {
       }
 
       // Xác suất chỉnh sửa bình luận
-      if (probabilityCheck(config.editComment)) {
+      if (checkProbability(config.editComment, "Video", "editComment")) {
         logger.info("Editing comment before posting");
 
         // Thêm một cụm từ vào cuối
@@ -768,7 +784,13 @@ export class VideoController {
 
       if (hasNotificationDialog) {
         // Xác suất bật thông báo
-        if (probabilityCheck(config.enableNotifications)) {
+        if (
+          checkProbability(
+            config.enableNotifications,
+            "Video",
+            "enableNotifications"
+          )
+        ) {
           logger.info("Enabling notifications");
 
           // Chọn một tùy chọn thông báo ngẫu nhiên
@@ -839,7 +861,7 @@ export class VideoController {
       let selectedAction = "watchSuggested";
 
       for (const action of actions) {
-        if (probabilityCheck(action.probability)) {
+        if (checkProbability(action.probability, "Video", action.name)) {
           selectedAction = action.name;
           break;
         }

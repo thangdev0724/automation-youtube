@@ -1,13 +1,15 @@
 {
   "name": "autoyoutube",
   "version": "1.0.0",
-  "description": "",
+  "description": "YouTube automation with enhanced logging and reporting",
   "main": "index.js",
   "scripts": {
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
+    "enhanced": "ts-node src/index-enhanced.ts",
     "build": "tsc",
     "clean": "rm -rf dist",
+    "build:enhanced": "tsc && cp dist/index.js dist/index.original.js && cp dist/index-enhanced.js dist/index.js",
     "postinstall": "playwright install chromium"
   },
   "author": "",
@@ -21,6 +23,7 @@
     "axios": "^1.8.2",
     "dotenv": "^16.4.7",
     "googleapis": "^146.0.0",
+    "open": "^8.4.0",
     "playwright": "^1.51.0",
     "winston": "^3.17.0",
     "xstate": "^5.19.2"
