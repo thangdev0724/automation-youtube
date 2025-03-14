@@ -5,21 +5,17 @@ import {
   CHANNEL_SELECTOR,
   CHANNEL_TAB_ITEM,
   CHANNEL_TAB_VIDEO,
-  CHANNEL_VIDEO_ITEM,
-  HOME_SELECTOR,
-  SEARCH_INPUT,
+  HOME_VIDEO_LINK_TITLE,
 } from "../constants/selector";
 import { Session } from "../models/session";
-import { IChannelConfig } from "../types/config";
+import { IChannelConfig, IResultState } from "../types/config";
 import { logger } from "../utils/logger";
 import { probabilityCheck, randomDelay, randomInt } from "../utils/random";
-import { BrowserManager } from "./browser";
+import { HelperViewPort } from "./helper";
 
-export class ChannelController {
-  private browserManager: BrowserManager;
-
+export class ChannelController extends HelperViewPort {
   constructor() {
-    this.browserManager = BrowserManager.getInstance();
+    super();
   }
 
   /**
@@ -35,22 +31,25 @@ export class ChannelController {
       channelUrl?: string;
       channelName?: string;
     }
-  ): Promise<{ action: string; data?: any }> {
+  ): Promise<IResultState> {
     try {
       logger.info(`Browsing channel: ${channelData?.channelName || "Unknown"}`);
-      const page = await this.browserManager.getCurrentPage();
+      const page = await this.getBrowserManager().getCurrentPage();
 
       // Cập nhật thời gian hoạt động
       session.updateActivity();
-
-      // 1. Tải trang kênh
-      await this.loadChannelPage(page, channelData?.channelUrl);
-
+      await this.loadChannelPage(page, session);
       // 2. Xem thông tin kênh hoặc danh sách video (dựa trên xác suất)
-      if (probabilityCheck(config.viewChannelInfo)) {
-        await this.viewChannelInfo(page);
+      if (
+        probabilityCheck(
+          config.probReadChannelInfo,
+          "probReadChannelInfo",
+          session
+        )
+      ) {
+        await this.viewChannelInfo(page, session);
       } else {
-        await this.viewVideosList(page);
+        await this.viewVideosList(page, session);
       }
 
       // 3. Cuộn xem video kênh và thực hiện hành động
@@ -63,24 +62,47 @@ export class ChannelController {
       return browsingResult;
     } catch (error) {
       logger.error("Error browsing channel", { error });
-      await this.browserManager.saveScreenshot("channel_error");
-      return { action: "error", data: { error } };
+      return {
+        action: "Error",
+        stateName: "Channel",
+        error,
+        data: error,
+      };
     }
   }
 
   /**
    * Tải trang kênh
    */
-  private async loadChannelPage(
-    page: Page,
-    channelUrl?: string
-  ): Promise<void> {
-    // Nếu có URL kênh cụ thể, điều hướng đến đó
-    if (channelUrl) {
-      logger.info(`Navigating to channel URL: ${channelUrl}`);
-      await page.goto(channelUrl, { waitUntil: "networkidle" });
+  private async loadChannelPage(page: Page, session: Session): Promise<void> {
+    const isPageChannel = page.url().includes("@") || page.url().includes("/@");
+    if (isPageChannel) {
+      logger.info("Successfully loaded channel page");
     } else {
       // Nếu đang ở trang video, click vào tên kênh
+      if (
+        page.url() === "https://www.youtube.com/" ||
+        page.url().includes("search_query") ||
+        page.url().includes("results?search_query")
+      ) {
+        await this.elementsInViewport({
+          selector: "#text-container #text > a",
+          classCus: "automated-channel-name",
+        });
+
+        const elements = await page.$$(`.automated-channel-name`);
+        const randomIndex = randomInt(0, elements.length - 1);
+        const randomElement = elements[randomIndex];
+        const title = await randomElement.textContent();
+        session.recordActivities("viewChannel", "ChannelBrowse", {
+          title: title,
+        });
+        logger.info(`Hovering over channel ${title}`);
+        await randomElement.hover();
+        await randomDelay(1000, 2000);
+        await randomElement.click();
+        return;
+      }
       logger.info("Attempting to navigate to channel from current page");
       try {
         const channelLink = await page.$(CHANNEL_SELECTOR);
@@ -92,6 +114,7 @@ export class ChannelController {
         }
       } catch (error) {
         logger.error("Error navigating to channel", { error });
+        session.recordError(error, "viewChannel", "ChannelBrowse");
         throw error;
       }
     }
@@ -119,7 +142,7 @@ export class ChannelController {
   /**
    * Xem thông tin kênh
    */
-  private async viewChannelInfo(page: Page): Promise<void> {
+  private async viewChannelInfo(page: Page, session: Session): Promise<void> {
     logger.info("Viewing channel information");
 
     // Cuộn lên đầu trang để xem thông tin kênh
@@ -128,14 +151,10 @@ export class ChannelController {
     });
     await randomDelay(1000, 2000);
 
-    // Lấy thông tin kênh (tên, số người đăng ký)
-    // const channelInfo = await this.getChannelInfo(page);
-    // logger.info("Channel info:", channelInfo);
-
     try {
-      // Tìm tab About/Giới thiệu
       const aboutTab = await page.$(CHANNEL_ABOUT);
       if (aboutTab) {
+        session.recordActivities("viewChannel", "ChannelInfo", "Viewing...");
         await aboutTab.click();
         logger.info("Clicked on About tab");
         await randomDelay(2000, 3000);
@@ -143,14 +162,18 @@ export class ChannelController {
         await randomDelay(1000, 2000);
       }
     } catch (error) {
-      logger.warn("Could not navigate to About tab", { error });
+      logger.warn("Could not navigate to About tab", error);
+      session.recordError(error, "viewChannel", "ChannelInfo");
+      await page.keyboard.press("Escape");
+
+      throw new Error("Could not navigate to About tab");
     }
   }
 
   /**
    * Xem danh sách video
    */
-  private async viewVideosList(page: Page): Promise<void> {
+  private async viewVideosList(page: Page, session: Session): Promise<void> {
     logger.info("Viewing videos list");
 
     // Tìm tab Videos
@@ -162,6 +185,7 @@ export class ChannelController {
         await randomDelay(2000, 3000);
       }
     } catch (error) {
+      session.recordError(error, "viewChannel", "viewVideosList");
       logger.warn("Could not navigate to Videos tab, might already be on it", {
         error,
       });
@@ -172,164 +196,72 @@ export class ChannelController {
   }
 
   /**
-   * Lấy thông tin kênh
-   */
-  private async getChannelInfo(page: Page): Promise<{
-    name: string;
-    subscribers: string;
-    videoCount: string;
-    isSubscribed: boolean;
-  }> {
-    try {
-      const channelInfo = await page.evaluate(() => {
-        // Tên kênh
-        const nameElement = document.querySelector(
-          "#channel-name yt-formatted-string, #channel-header yt-formatted-string"
-        );
-        const name = nameElement ? nameElement.textContent?.trim() : "Unknown";
-
-        // Số người đăng ký
-        const subscriberElement = document.querySelector("#subscriber-count");
-        const subscribers = subscriberElement
-          ? subscriberElement.textContent?.trim()
-          : "Unknown";
-
-        // Số video
-        const videoCountElement = document.querySelector("#videos-count");
-        const videoCount = videoCountElement
-          ? videoCountElement.textContent?.trim()
-          : "Unknown";
-
-        // Kiểm tra đã đăng ký kênh chưa
-        const subscribeButton = document.querySelector(
-          "#subscribe-button paper-button, #subscribe-button button"
-        );
-        const isSubscribed = subscribeButton
-          ? subscribeButton.getAttribute("subscribed") === "" ||
-            subscribeButton.getAttribute("aria-label")?.includes("Unsubscribe")
-          : false;
-
-        return {
-          name: name || "Unknown",
-          subscribers: subscribers || "Unknown",
-          videoCount: videoCount || "Unknown",
-          isSubscribed: isSubscribed || false,
-        };
-      });
-
-      return channelInfo;
-    } catch (error) {
-      logger.warn("Error getting channel info", { error });
-      return {
-        name: "Unknown",
-        subscribers: "Unknown",
-        videoCount: "Unknown",
-        isSubscribed: false,
-      };
-    }
-  }
-
-  /**
    * Cuộn xem video kênh và quyết định hành động tiếp theo
    */
   private async browseChannelVideos(
     page: Page,
     session: Session,
     config: IChannelConfig
-  ): Promise<{ action: string; data?: any }> {
+  ): Promise<IResultState> {
     logger.info("Browsing channel videos");
+    let result: IResultState = {
+      action: "None",
+      data: null,
+      stateName: "Channel",
+    };
+    let count = 0;
 
-    // Số lần cuộn tối đa
-    const maxScrolls = randomInt(2, 5);
-
-    for (let i = 0; i < maxScrolls; i++) {
+    while (true) {
       // Cập nhật hoạt động
       session.updateActivity();
 
-      // Kiểm tra giới hạn phiên
-      const limits = session.checkLimits();
-      if (limits.exceedsLimit) {
-        logger.info("Session limit exceeded while browsing channel", {
-          reason: limits.reason,
+      if (count >= 3) {
+        // Kiểm tra giới hạn phiên
+        const limits = session.checkLimits();
+        if (limits.exceedsLimit) {
+          logger.info("Session limit exceeded while browsing search results", {
+            reason: limits.reason,
+          });
+          return {
+            action: "endSession",
+            data: limits.reason,
+            stateName: "Search",
+          };
+        }
+
+        await this.scrollDown();
+        await randomDelay(1000, 3000);
+        const classCus = "automated-video-title-from-channel";
+        logger.info("Evaluate video...");
+        await this.elementsInViewport({
+          selector: HOME_VIDEO_LINK_TITLE,
+          classCus: classCus,
         });
-        return {
-          action: "endSession",
-          data: { reason: limits.reason },
-        };
-      }
 
-      // Cuộn để xem thêm video
-      await page.evaluate(() => {
-        window.scrollBy({
-          top: window.innerHeight * 0.7,
-          behavior: "smooth",
-        });
-      });
-
-      await randomDelay(1500, 3000);
-
-      // Quyết định hành động: chọn video, chuyển tab, hoặc rời khỏi kênh
-
-      // 1. Chọn video từ kênh (70% khả năng)
-      if (probabilityCheck(config.selectChannelVideo)) {
-        // Chọn một video ngẫu nhiên từ danh sách
-        const channelVideos = await page.$$(
-          "ytd-grid-video-renderer, ytd-rich-item-renderer"
-        );
-
-        if (channelVideos.length > 0) {
-          const randomIndex = randomInt(0, channelVideos.length - 1);
-          const selectedVideo = channelVideos[randomIndex];
-
-          // Scroll đến video
-          await selectedVideo.scrollIntoViewIfNeeded();
-          await randomDelay(500, 1500);
-
-          // Lấy tiêu đề video
-          const videoTitle = await selectedVideo
-            .$eval(
-              "#video-title",
-              (el: HTMLElement) => el.textContent?.trim() || "Unknown"
-            )
-            .catch(() => "Unknown");
-
-          // Hover và click
-          await selectedVideo.hover();
-          await randomDelay(1000, 2000);
-          await selectedVideo.click();
-
-          logger.info(`Selected channel video: ${videoTitle}`);
+        if (
+          probabilityCheck(
+            config.probScrollChannelVideo,
+            "probScrollChannelVideo",
+            session
+          )
+        ) {
+          session.recordActivities("watchVideo", "ChannelBrowse");
+          this.playRandomVideo(page, session, classCus, "ChannelBrowse");
           await randomDelay(2000, 4000);
-
-          // Trả về action watchVideo theo xác suất channelToVideo
-          if (probabilityCheck(config.channelToVideo)) {
-            return {
-              action: "watchVideo",
-              data: {
-                source: "channel",
-                videoTitle,
-              },
-            };
-          } else {
-            // Trường hợp hiếm, click nhưng quay lại
-            await page.goBack();
-            await randomDelay(1000, 2000);
-          }
+          result.action = "watchVideo";
+          break;
+        } else {
+          session.recordActivities("endNow", "ChannelBrowse");
+          this.playRandomVideo(page, session, classCus, "ChannelBrowse");
+          await randomDelay(2000, 4000);
+          break;
         }
       }
-      // 2. Chuyển tab kênh (20% khả năng)
-      else if (probabilityCheck(config.switchChannelTab)) {
-        await this.switchChannelTab(page);
-      }
-      // 3. Rời khỏi kênh (10% khả năng còn lại)
-      else {
-        // Quyết định xem sẽ đi đâu sau khi rời kênh
-        return await this.leaveChannel(page, config);
-      }
+
+      count++;
     }
 
-    // Sau khi cuộn hết, quyết định hành động cuối cùng
-    return await this.leaveChannel(page, config);
+    return result;
   }
 
   /**
@@ -376,110 +308,6 @@ export class ChannelController {
       await randomDelay(2000, 4000);
     } else {
       logger.warn("No channel tabs found to switch");
-    }
-  }
-
-  /**
-   * Rời khỏi kênh và quyết định hành động tiếp theo
-   */
-  private async leaveChannel(
-    page: Page,
-    config: any
-  ): Promise<{ action: string; data?: any }> {
-    logger.info("Leaving channel");
-
-    // Tạo một mảng các hành động có thể và xác suất tương ứng
-    const actions = [
-      {
-        name: "channelToVideo",
-        action: "watchVideo",
-        probability: config.channelToVideo,
-      },
-      {
-        name: "channelToSearch",
-        action: "search",
-        probability: config.channelToSearch,
-      },
-      {
-        name: "channelToHome",
-        action: "goToHome",
-        probability: config.channelToHome,
-      },
-    ];
-
-    // Chọn hành động
-    let selectedAction = actions[0].action;
-
-    for (const action of actions) {
-      if (probabilityCheck(action.probability)) {
-        selectedAction = action.action;
-        break;
-      }
-    }
-
-    // Thực hiện hành động rời kênh
-    switch (selectedAction) {
-      case "watchVideo":
-        // Tìm một video để xem (có thể là video đề xuất ở sidebar)
-        logger.info("Leaving channel to watch a video");
-
-        // Tìm video đề xuất
-        const suggestedVideos = await page.$$(CHANNEL_VIDEO_ITEM);
-
-        if (suggestedVideos.length > 0) {
-          // Chọn một video ngẫu nhiên
-          const randomIndex = randomInt(0, suggestedVideos.length - 1);
-          const selectedVideo = suggestedVideos[randomIndex];
-
-          // Scroll đến video
-          await selectedVideo.scrollIntoViewIfNeeded();
-          await randomDelay(500, 1500);
-
-          // Lấy tiêu đề video
-          const videoTitle = await selectedVideo
-            .$eval(
-              "#video-title",
-              (el: HTMLElement) => el.textContent?.trim() || "Unknown"
-            )
-            .catch(() => "Unknown");
-
-          // Click vào video
-          await selectedVideo.click();
-          await randomDelay(2000, 3000);
-
-          return {
-            action: "watchVideo",
-            data: {
-              source: "channelSuggested",
-              videoTitle,
-            },
-          };
-        } else {
-          // Nếu không tìm thấy video đề xuất, quay về trang chủ
-          return { action: "goToHome" };
-        }
-
-      case "search":
-        logger.info("Leaving channel to perform search");
-        // Click vào ô tìm kiếm
-        await page.click(SEARCH_INPUT);
-        return { action: "search" };
-
-      case "goToHome":
-      default:
-        logger.info("Leaving channel to go to home page");
-        // Click vào logo YouTube
-        try {
-          await page.click(HOME_SELECTOR);
-          await randomDelay(1000, 2000);
-        } catch (error) {
-          logger.warn("Error clicking YouTube logo, navigating directly", {
-            error,
-          });
-          await page.goto("https://www.youtube.com");
-        }
-
-        return { action: "goToHome" };
     }
   }
 

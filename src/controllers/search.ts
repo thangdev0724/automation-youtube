@@ -1,8 +1,9 @@
 // src/controllers/search.ts
 import { Page } from "playwright";
-import { SEARCH_INPUT } from "../constants/selector";
+import { PERCENTAGE_SCROLL_PAGE } from "../constants/config";
+import { SEARCH_INPUT, SEARCH_VIDEO_LINK_TITLE } from "../constants/selector";
 import { Session } from "../models/session";
-import { ISearchStateConfig } from "../types/config";
+import { IResultState, ISearchStateConfig } from "../types/config";
 import { logger } from "../utils/logger";
 import { probabilityCheck, randomDelay, randomInt } from "../utils/random";
 import { BrowserManager } from "./browser";
@@ -18,7 +19,7 @@ export class SearchController {
   /**
    * Điều hướng đến tìm kiếm YouTube
    */
-  async navigateToSearch(): Promise<boolean> {
+  async navigateToSearch(session: Session): Promise<boolean> {
     try {
       const page = await this.browserManager.getCurrentPage();
       logger.info("Navigating to search");
@@ -29,6 +30,7 @@ export class SearchController {
       return true;
     } catch (error) {
       logger.error("Error navigating to search", { error });
+      session.recordError(error, "CHuyển tới tìm kiếm", "navigateToSearch");
       return false;
     }
   }
@@ -43,20 +45,18 @@ export class SearchController {
     session: Session,
     config: ISearchStateConfig,
     specificTerm?: string
-  ): Promise<{ action: string; data?: any }> {
+  ): Promise<IResultState> {
     try {
       logger.info("Performing YouTube search");
       const page = await this.browserManager.getCurrentPage();
-      this.searchTerms = config.searchKeywords;
+      this.searchTerms = config.keywords;
       // Cập nhật thời gian hoạt động của phiên
       session.updateActivity();
+      // Kiểm tra trạng thái session
+      session.checkLimits();
 
       // === NHẬP TÌM KIẾM ===
-      await this.executeSearchInput(
-        page,
-        specificTerm,
-        config.correctSearchTypo
-      );
+      await this.executeSearchInput(page, session, config);
 
       // Tăng số lần tìm kiếm trong phiên
       session.incrementSearches();
@@ -76,7 +76,7 @@ export class SearchController {
     } catch (error) {
       logger.error("Error performing search", { error });
       await this.browserManager.saveScreenshot("search_error");
-      return { action: "error", data: { error } };
+      return { action: "Error", data: error, stateName: "Search" };
     }
   }
 
@@ -85,14 +85,16 @@ export class SearchController {
    */
   private async executeSearchInput(
     page: Page,
-    specificTerm?: string,
-    correctSearchTypo: number = 15
+    session: Session,
+    config: ISearchStateConfig
   ): Promise<string> {
     // Chọn từ khóa tìm kiếm ngẫu nhiên hoặc sử dụng từ khóa cụ thể
     const searchTerm =
-      specificTerm ||
       this.searchTerms[randomInt(0, this.searchTerms.length - 1)];
     logger.info(`Searching for: ${searchTerm}`);
+    session.recordActivities("Search", "Search", {
+      keyword: searchTerm,
+    });
 
     // Đảm bảo đang focus vào ô tìm kiếm
     await page.click(SEARCH_INPUT);
@@ -114,8 +116,11 @@ export class SearchController {
     }
 
     // Xác suất sửa lỗi đánh máy
-    if (probabilityCheck(correctSearchTypo)) {
+    if (
+      probabilityCheck(config.probInputCorrect, "probInputCorrect", session)
+    ) {
       logger.info("Correcting typo in search");
+      session.recordActivities("Search", "Search");
       // Xóa 1-3 ký tự cuối và gõ lại
       const charsToDelete = randomInt(1, 3);
       for (let i = 0; i < charsToDelete; i++) {
@@ -159,12 +164,13 @@ export class SearchController {
     page: Page,
     session: Session,
     config: ISearchStateConfig
-  ): Promise<{ action: string; data?: any }> {
+  ): Promise<IResultState> {
     logger.info("Browsing search results");
-
-    // Số lần cuộn tối đa
-    // const maxScrolls = randomInt(2, 8);
-
+    const resultBrowse: IResultState = {
+      action: "None",
+      stateName: "Search",
+      data: {},
+    };
     while (true) {
       // Cập nhật hoạt động
       session.updateActivity();
@@ -177,242 +183,113 @@ export class SearchController {
         });
         return {
           action: "endSession",
-          data: { reason: limits.reason },
+          data: limits.reason,
+          stateName: "Search",
         };
       }
 
-      // Cuộn xuống để xem thêm kết quả
-      await page.evaluate(() => {
-        window.scrollBy({
-          top: window.innerHeight * 0.7,
-          behavior: "smooth",
-        });
-      });
-
+      await this.scrollDown();
       await randomDelay(1000, 3000);
 
-      // Xác suất hover vào thumbnail
-      if (probabilityCheck(config.hoverThumbnail)) {
-        logger.info("Hovering over search result thumbnail");
+      logger.info("Evaluate video...");
+      await this.elementsInViewport(SEARCH_VIDEO_LINK_TITLE);
 
-        // Lấy danh sách kết quả tìm kiếm
-        const searchResults = await page.$$("ytd-video-renderer");
+      if (
+        probabilityCheck(
+          config.probSearchVideoGood,
+          "probSearchVideoGood",
+          session
+        )
+      ) {
+        logger.info("Evaluated video is good...");
 
-        if (searchResults.length > 0) {
-          // Chọn một kết quả ngẫu nhiên
-          const randomIndex = randomInt(0, searchResults.length - 1);
-          const result = searchResults[randomIndex];
-
-          // Scroll để kết quả hiển thị trong viewport
-          await result.scrollIntoViewIfNeeded();
-          await randomDelay(500, 1500);
-
-          // Hover lên thumbnail
-          await result.hover();
-          await randomDelay(1000, 3000);
-
-          // Xác suất click vào video sau khi hover
-          logger.info(
-            "loaded config clickVideoAfterHover" + config.clickVideoAfterHover
-          );
-          if (probabilityCheck(config.clickVideoAfterHover)) {
-            logger.info("Clicking on search result after hover");
-
-            // Lấy tiêu đề video trước khi click
-            const videoTitle = await result
-              .$eval(
-                "a#video-title",
-                (el: HTMLElement) => el.textContent?.trim() || "Unknown"
-              )
-              .catch(() => "Unknown");
-
-            // Click vào thumbnail
-            await result.$eval("a#video-title", (el: HTMLElement) =>
-              el.click()
-            );
-            await randomDelay(2000, 4000);
-
-            // Mô phỏng tỷ lệ chuyển từ search sang video
-            if (probabilityCheck(config.searchToVideo)) {
-              return {
-                action: "watchVideo",
-                data: {
-                  source: "search",
-                  videoTitle,
-                },
-              };
-            } else {
-              // Trường hợp hiếm gặp khi click vào video nhưng không xem
-              await page.goBack();
-              await randomDelay(1000, 2000);
-              return { action: "search" };
-            }
-          }
-
-          // Nếu không click, xác suất tiếp tục cuộn
-          if (probabilityCheck(config.continueScrollAfterHover)) {
-            logger.info("Continuing to scroll after hover");
-            continue;
-          } else {
-            // Nếu không tiếp tục cuộn, kết thúc tìm kiếm
-            logger.info("Ending search after hover");
-            break;
-          }
+        if (
+          probabilityCheck(
+            config.probWatchIfGoodSearch,
+            "probWatchIfGoodSearch",
+            session
+          )
+        ) {
+          session.recordActivities("WatchVidGood", "Search");
+          this.playRandomVideo(page, session);
+          await randomDelay(2000, 4000);
+          resultBrowse.action = "watchVideo";
+          break;
+        } else {
+          session.recordActivities("skipWatchVideo", "Search");
+          break;
         }
       } else {
-        // Nếu không hover, xác suất cuộn tiếp
-        if (probabilityCheck(config.continueScrollResults)) {
-          // Tiếp tục vòng lặp cuộn
-          continue;
+        logger.info("Evaluated video is bad...");
+        if (
+          probabilityCheck(
+            config.probWatchIfBadSearch,
+            "probWatchIfBadSearch",
+            session
+          )
+        ) {
+          session.recordActivities("WatchVidBad", "Search");
+          this.playRandomVideo(page, session);
+          await randomDelay(2000, 4000);
+          resultBrowse.action = "watchVideo";
+
+          break;
         } else {
-          // Các lựa chọn khác: kết thúc tìm kiếm, cuộn lên, v.v.
-          if (probabilityCheck(config.endSearch)) {
-            logger.info("Ending search while scrolling");
-            break;
-          } else if (probabilityCheck(config.scrollUp)) {
-            logger.info("Scrolling up in search results");
-            await page.evaluate(() => {
-              window.scrollBy({
-                top: -window.innerHeight * 0.7,
-                behavior: "smooth",
-              });
-            });
-            await randomDelay(1000, 2000);
-
-            // Sau khi cuộn lên, xác suất hover
-            if (probabilityCheck(config.hoverAfterScrollUp)) {
-              // Quay lại logic hover ở trên
-              const searchResults = await page.$$("ytd-video-renderer");
-              if (searchResults.length > 0) {
-                const randomIndex = randomInt(0, searchResults.length - 1);
-                const result = searchResults[randomIndex];
-                await result.scrollIntoViewIfNeeded();
-                await result.hover();
-                await randomDelay(1000, 3000);
-                logger.info("Loaded config clickVideoAfterHover", {
-                  clickVideoAfterHover: config.clickVideoAfterHover,
-                });
-                if (probabilityCheck(config.clickVideoAfterHover)) {
-                  logger.info(
-                    "Clicking on search result after scroll up and hover"
-                  );
-                  const videoTitle = await result
-                    .$eval(
-                      "a#video-title",
-                      (el: HTMLElement) => el.textContent?.trim() || "Unknown"
-                    )
-                    .catch(() => "Unknown");
-                  await result.click();
-                  await randomDelay(2000, 4000);
-
-                  return {
-                    action: "watchVideo",
-                    data: {
-                      source: "search",
-                      videoTitle,
-                    },
-                  };
-                }
-              }
-            } else if (probabilityCheck(config.continueScrollAfterScrollUp)) {
-              // Tiếp tục cuộn sau khi cuộn lên
-              continue;
-            } else {
-              // Kết thúc sau khi cuộn lên
-              break;
-            }
-          } else if (probabilityCheck(config.continueScrollAgain)) {
-            // Tiếp tục cuộn lại
-            continue;
-          } else {
-            // Kết thúc trong trường hợp khác
-            break;
-          }
+          session.recordActivities("skipWatchVideo", "Search");
+          break;
         }
       }
     }
-
-    // Khi kết thúc duyệt kết quả tìm kiếm, quyết định hành động tiếp theo
-    if (probabilityCheck(config.searchToVideo)) {
-      // Chọn một video ngẫu nhiên từ kết quả
-      logger.info("Selecting random video from search results");
-      const results = await page.$$("ytd-video-renderer");
-
-      if (results.length > 0) {
-        const randomIndex = randomInt(0, results.length - 1);
-        const result = results[randomIndex];
-
-        // Scroll đến video
-        await result.scrollIntoViewIfNeeded();
-        await randomDelay(500, 1500);
-
-        // Lấy tiêu đề trước khi click
-        const videoTitle = await result
-          .$eval(
-            "a#video-title",
-            (el: HTMLElement) => el.textContent?.trim() || "Unknown"
-          )
-          .catch(() => "Unknown");
-        logger.info("Video title là: " + videoTitle);
-        // Click vào video
-        await result.$eval("a#video-title", (el: HTMLElement) => el.click());
-        await randomDelay(2000, 4000);
-
-        return {
-          action: "watchVideo",
-          data: {
-            source: "search",
-            videoTitle,
-          },
-        };
-      }
-    } else if (probabilityCheck(config.searchToHome)) {
-      // Quay về trang chủ
-      logger.info("Returning to home page from search");
-
-      try {
-        // Click vào logo YouTube để về trang chủ
-        await page.click("a#logo");
-        await randomDelay(2000, 4000);
-
-        return { action: "goToHome" };
-      } catch (error) {
-        logger.warn("Error navigating to home, using direct URL", { error });
-        await this.browserManager.navigateTo("https://www.youtube.com");
-        return { action: "goToHome" };
-      }
-    }
-
-    // Mặc định, ở lại trang tìm kiếm
-    return { action: "finishSearch" };
+    return resultBrowse;
   }
 
-  /**
-   * Lấy danh sách từ khóa tìm kiếm đề xuất
-   */
-  async getSuggestedSearchTerms(partialTerm: string): Promise<string[]> {
-    try {
-      const page = await this.browserManager.getCurrentPage();
-
-      // Nhập một phần từ khóa để xem gợi ý
-      await page.click(SEARCH_INPUT);
-      await page.keyboard.type(partialTerm, { delay: randomInt(50, 150) });
-
-      // Đợi gợi ý xuất hiện
-      await page.waitForSelector("ytd-suggestion-entity-renderer", {
-        timeout: 5000,
+  private async scrollDown() {
+    const page = await this.browserManager.getCurrentPage();
+    await page.evaluate((percen: number) => {
+      window.scrollBy({
+        top: window.innerHeight * percen,
+        behavior: "smooth",
       });
+    }, PERCENTAGE_SCROLL_PAGE);
+  }
 
-      // Lấy danh sách gợi ý
-      const suggestions = await page.$$eval(
-        "ytd-suggestion-entity-renderer",
-        (elements) => elements.map((el) => el.textContent?.trim() || "")
-      );
+  private async elementsInViewport(selector: string): Promise<Element[]> {
+    const page = await this.browserManager.getCurrentPage();
+    return await page.evaluate((selector: string) => {
+      return Array.from(document.querySelectorAll(selector))
+        .map((el, id) => {
+          el.classList.add(`automated-element-from-search`);
+          return el;
+        })
+        .filter((el) => {
+          const rect = el.getBoundingClientRect();
+          return (
+            rect.top < window.innerHeight &&
+            rect.bottom > 0 &&
+            rect.left < window.innerWidth &&
+            rect.right > 0
+          );
+        });
+    }, selector);
+  }
 
-      return suggestions;
+  private async playRandomVideo(page: Page, session: Session) {
+    try {
+      const elements = await page.$$(".automated-element-from-Search");
+      const randomIndex = randomInt(0, elements.length - 1);
+      const randomElement = elements[randomIndex];
+      const title = await randomElement.textContent();
+      session.recordActivities("playVideo", "Search", {
+        title: title,
+      });
+      logger.info(`Hovering over video ${title}`);
+      await randomElement.hover();
+      await randomDelay(1000, 2000);
+      logger.info(`Watching video: ${title}`);
+      await randomElement.click();
     } catch (error) {
-      logger.error("Error getting suggested search terms", { error });
-      return [];
+      session.recordError(error, "playRandomVideo", "Search");
+      throw Error("Error playing random video");
     }
   }
 }

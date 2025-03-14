@@ -1,22 +1,25 @@
-// src/index.ts (cải tiến)
+import * as dotenv from "dotenv";
 import { getConfig } from "./config/sheets";
+import { CONFIG_OBJECT } from "./constants/config";
 import { BrowserManager } from "./controllers/browser";
-import { ChannelController } from "./controllers/channel";
 import { HomeController } from "./controllers/home";
-import { SearchController } from "./controllers/search";
-import { VideoController } from "./controllers/video";
 import { Session } from "./models/session";
 import {
+  IAppConfig,
   IChannelConfig,
-  IDetermineActionConfig,
-  IHomeStateConfig,
+  IEvaluateHomeVideoConfig,
+  IEvaluateSearchVideoConfig,
+  IEvaluateWatchDirectVideoConfig,
+  IHomeConfig,
+  IResultState,
   ISearchStateConfig,
-  IWatchVideoConfig,
+  ISessionConfig,
 } from "./types/config";
-import { ISessionConfig } from "./types/session";
 import { logger } from "./utils/logger";
 import { probabilityCheck, randomDelay } from "./utils/random";
-import * as dotenv from "dotenv";
+import { SearchController } from "./controllers/search";
+import { WatchDirectVideo } from "./controllers/direct-video";
+import { ChannelController } from "./controllers/channel";
 
 dotenv.config();
 // Các controller toàn cục
@@ -24,85 +27,102 @@ let browserManager: BrowserManager;
 let session: Session;
 let homeController: HomeController;
 let searchController: SearchController;
-let videoController: VideoController;
+let watchDirectController: WatchDirectVideo;
 let channelController: ChannelController;
 
-// các cấu hình cần load
+// Các cấu hình toàn cục
+let sessionConfig: ISessionConfig;
+let homeConfig: IHomeConfig;
+let evaluateHomeVIdeo: IEvaluateHomeVideoConfig;
+let appConfig: IAppConfig;
 let searchConfig: ISearchStateConfig;
-let videoConfig: IWatchVideoConfig;
-let homeConfig: IHomeStateConfig;
-let loadConfig: ISessionConfig;
-let navigationConfig: IDetermineActionConfig;
+let evaluateSearchVideo: IEvaluateSearchVideoConfig;
+let evaluateWatchDirectVideo: IEvaluateWatchDirectVideoConfig;
 let channelConfig: IChannelConfig;
 
 /**
- * Xử lý việc chuyển sang xem video
+ * Hàm xử lý hành động tiếp theo dựa trên kết quả từ controller
  */
-async function handleWatchVideo(
-  videoTitle: string,
-  source: string
-): Promise<void> {
-  logger.info(`Watching video: ${videoTitle || "Unknown"} from ${source}`);
+async function handleNextAction(actionResult: IResultState): Promise<void> {
+  // Cập nhật thời gian hoạt động
+  session.updateActivity();
+  session.recordActivities(
+    actionResult.action,
+    actionResult.stateName || "Unknow"
+  );
 
-  // Gọi VideoController để xem video
-  const watchResult = await videoController.watchVideo(session, videoConfig);
+  // Kiểm tra giới hạn phiên
+  const limits = session.checkLimits();
+  if (limits.exceedsLimit) {
+    logger.info(`Session limit exceeded: ${limits.reason}`);
+    await browserManager.close();
+    return; // Kết thúc phiên
+  }
 
-  // Xử lý kết quả từ việc xem video
-  if (
-    watchResult.action === "videoCompleted" ||
-    watchResult.action === "videoPartiallyWatched"
-  ) {
-    // Nếu cho phép tương tác
-    if (watchResult.data?.allowInteraction) {
-      // Quyết định tương tác
-      const interactionResult = await videoController.decideInteractions(
-        session,
-        videoConfig,
-        watchResult.data.videoInfo
+  session.recordStateTransition(
+    actionResult.stateName || "Unknow",
+    actionResult.action
+  );
+
+  switch (actionResult.action) {
+    case "homeBrowsing":
+      logger.info("Starting home browsing flow");
+      await handleHomePage();
+      break;
+
+    case "endHomeBrowseEarly":
+      logger.info("Ending home browse early, returning to home page");
+      await handleHomePage();
+      break;
+
+    case "Search":
+      logger.info("Starting search flow");
+      await handleSearchPage();
+      break;
+
+    case "WatchDirect":
+      logger.info("Starting direct watch flow");
+      await handleWatchDirectVideo();
+      break;
+
+    case "viewChannel":
+      logger.info("Starting channel browsing flow");
+      await handleChannelBrowse();
+      break;
+
+    case "watchVideo":
+      logger.info("Starting video watching flow");
+      await handleWatchVideo(actionResult.data);
+      break;
+
+    case "endNow":
+      logger.info("Ending session now as requested");
+      await randomDelay(2000, 5000);
+      await browserManager.close();
+      return; // Kết thúc phiên
+
+    case "None":
+    default:
+      logger.info(
+        `Unknown action: ${actionResult.action}, returning to home page`
       );
-
-      logger.info("Interaction results:", {
-        liked: interactionResult.liked,
-        commented: interactionResult.commented,
-        subscribed: interactionResult.subscribed,
-      });
-
-      // Quyết định hành động tiếp theo
-      const nextAction = await videoController.decideNextAction(
-        session,
-        navigationConfig,
-        watchResult.data.videoInfo
-      );
-
-      // Chuyển đến hành động tiếp theo
-      await handleNextAction(nextAction);
-    } else {
-      logger.info("Video was not watched enough for interactions");
-      // Quay lại trang chủ
-      await homeController.navigateToHome();
-    }
-  } else if (watchResult.action === "endSession") {
-    logger.info(
-      `Session ended while watching video due to: ${
-        watchResult.data?.reason || "unknown reason"
-      }`
-    );
-  } else if (watchResult.action === "error") {
-    logger.error("Error occurred during video watching", {
-      error: watchResult.data?.error,
-    });
-    // Quay lại trang chủ khi gặp lỗi
-    await homeController.navigateToHome();
+      // await handleHomePage();
+      break;
   }
 }
 
 /**
- * Xử lý việc chuyển sang tìm kiếm
+ * Hàm xử lý trang tìm kiếm
  */
-async function handleSearch(): Promise<void> {
-  logger.info("Performing search");
-
-  await searchController.navigateToSearch();
+async function handleSearchPage(): Promise<void> {
+  logger.info("Handling search page");
+  const keyw = searchConfig.keywords as any;
+  const keywords = keyw.split("|");
+  searchConfig = {
+    ...searchConfig,
+    ...evaluateSearchVideo,
+    keywords,
+  };
   const searchResult = await searchController.performSearch(
     session,
     searchConfig
@@ -118,184 +138,145 @@ async function handleSearch(): Promise<void> {
 }
 
 /**
- * Xử lý việc chuyển sang trang chủ
+ * Hàm xử lý trực tiếp xem video
  */
-async function handleHomePage(): Promise<void> {
-  logger.info("Navigating to home page");
-  await homeController.navigateToHome();
-  const browseResult = await homeController.browseHomePage(session, homeConfig);
+async function handleWatchDirectVideo(): Promise<void> {
+  logger.info("Handling direct video watching");
 
-  logger.info("Home browsing completed with result:", {
-    action: browseResult.action,
-    data: browseResult.data,
-  });
-
-  // Xử lý kết quả duyệt trang chủ
-  await handleNextAction(browseResult);
-}
-
-// Thêm hàm xử lý viewChannel
-async function handleViewChannel(channelData: {
-  channelUrl?: string;
-  channelName?: string;
-}): Promise<void> {
-  logger.info(`Viewing channel: ${channelData.channelName || "Unknown"}`);
-
-  const channelResult = await channelController.browseChannel(
+  const result = await watchDirectController.watchVideoDriect(
     session,
-    channelConfig,
-    channelData
+    evaluateWatchDirectVideo
   );
 
-  logger.info("Channel browsing completed with result:", {
-    action: channelResult.action,
-    data: channelResult.data,
+  logger.info("Watch video direct completed with result:", {
+    action: result.action,
+    data: result.data,
   });
 
-  // Xử lý kết quả từ việc duyệt kênh
-  await handleNextAction(channelResult);
+  await handleNextAction(result);
 }
 
 /**
- * Hàm xử lý hành động tiếp theo dựa trên kết quả từ controller
+ * Hàm xử lý duyệt kênh
  */
-async function handleNextAction(actionResult: {
-  action: string;
-  data?: any;
-}): Promise<void> {
-  // Cập nhật thời gian hoạt động
-  session.updateActivity();
+async function handleChannelBrowse(): Promise<void> {
+  logger.info("Handling channel browsing");
+  const result = await channelController.browseChannel(session, channelConfig);
 
-  // Kiểm tra giới hạn phiên
-  const limits = session.checkLimits();
-  if (limits.exceedsLimit) {
-    logger.info(`Session limit exceeded: ${limits.reason}`);
-    return; // Kết thúc phiên
-  }
+  logger.info("Channel completed with result:", {
+    action: result.action,
+    data: result.data,
+  });
 
-  // Xử lý action
-  switch (actionResult.action) {
-    case "watchVideo":
-      await handleWatchVideo(
-        actionResult.data?.videoTitle || "Unknown",
-        actionResult.data?.source || "unknown"
-      );
-      break;
+  await handleNextAction(result);
+}
 
-    case "search":
-      await handleSearch();
-      break;
+/**
+ * Hàm xử lý xem video
+ */
+async function handleWatchVideo(videoData?: any): Promise<void> {
+  logger.info("Handling video watching", { videoData });
+}
 
-    case "goToHome": {
-      await handleHomePage();
-      break;
-    }
-    case "endHomeBrowsing": {
-      const randomAction = Math.random() * 100;
+async function handleHomePage() {
+  logger.info("Handling home page");
+  await homeController.navigateToHome();
+  const result = await homeController.browseHomePage(session, {
+    ...homeConfig,
+    ...evaluateHomeVIdeo,
+  });
 
-      if (randomAction < 40) {
-        // 40% xác suất chuyển sang tìm kiếm
-        logger.info("Home browsing ended, switching to search");
-        await handleSearch();
-      } else if (randomAction < 80) {
-        // 40% xác suất tiếp tục duyệt trang chủ (làm mới)
-        logger.info("Home browsing ended, refreshing home page");
-        await handleHomePage();
-      } else {
-        // 20% xác suất kết thúc phiên
-        logger.info("Home browsing ended, ending session");
-        return; // Kết thúc phiên
-      }
-    }
-
-    case "finishSearch":
-      if (probabilityCheck(70)) {
-        logger.info("Search completed, returning to home page");
-        await handleHomePage();
-      } else {
-        logger.info("Search completed, starting a new search");
-        await handleSearch();
-      }
-      break;
-
-    case "viewChannel":
-      logger.info(
-        `Would view channel: ${actionResult.data?.channelName || "Unknown"}`
-      );
-      await handleViewChannel(actionResult.data);
-      break;
-
-    case "endSession":
-      logger.info(
-        `Session ended due to: ${actionResult.data?.reason || "unknown reason"}`
-      );
-      break;
-
-    case "error":
-      logger.error("Error occurred", { error: actionResult.data?.error });
-      // Quay về trang chủ khi gặp lỗi
-      await handleHomePage();
-      break;
-
-    default:
-      logger.info(`Unknown action: ${actionResult.action}, returning to home`);
-      await handleHomePage();
-  }
+  await handleNextAction(result);
 }
 
 async function main() {
   try {
-    logger.info("Starting YouTube automation session");
-    loadConfig = await getConfig("AppConfig");
-    const searchConfigLoad = await getConfig("Search");
-    searchConfigLoad.searchKeywords =
-      searchConfigLoad.searchKeywords &&
-      searchConfigLoad.searchKeywords.split(",");
-    searchConfig = searchConfigLoad;
-    homeConfig = await getConfig("Home");
-    videoConfig = await getConfig("Video");
-    navigationConfig = await getConfig("NavigationDecision");
-    channelConfig = await getConfig("Channel");
-
+    sessionConfig = await getConfig(CONFIG_OBJECT.Sessions);
+    homeConfig = await getConfig(CONFIG_OBJECT.HomeBrowsing);
+    evaluateHomeVIdeo = await getConfig(CONFIG_OBJECT.EvaluateHomeVideo);
+    appConfig = await getConfig(CONFIG_OBJECT.App);
+    searchConfig = await getConfig(CONFIG_OBJECT.Search);
+    evaluateSearchVideo = await getConfig(CONFIG_OBJECT.EvaluateSearchVideo);
+    evaluateWatchDirectVideo = await getConfig(
+      CONFIG_OBJECT.EvaluateDirectVideo
+    );
+    channelConfig = await getConfig(CONFIG_OBJECT.ChannelBrowsing);
     logger.info("Config loaded successfully");
 
     // 1. Initialize session
-    session = new Session(loadConfig);
+    session = new Session(sessionConfig);
     logger.info("Session initialized successfully");
 
     // 2. Setup browser
     browserManager = BrowserManager.getInstance();
+
     logger.info("Browser manager initialized");
+    homeController = new HomeController();
+    searchController = new SearchController();
+    watchDirectController = new WatchDirectVideo();
+    channelController = new ChannelController();
 
     // 3. Launch browser and create page
     await browserManager.launchPersistent();
     logger.info("Browser launched successfully");
+    await browserManager.navigateTo("https://www.youtube.com/");
+    await randomDelay(2000, 3000);
+    if (
+      probabilityCheck(appConfig.probHomeBrowsing, "probHomeBrowsing", session)
+    ) {
+      await handleNextAction({
+        action: "homeBrowsing",
+        stateName: "MainProcess",
+      });
+    } else if (probabilityCheck(appConfig.probSearch, "probSearch", session)) {
+      await handleNextAction({
+        action: "Search",
+        stateName: "MainProcess",
+      });
+    } else if (
+      probabilityCheck(appConfig.probWatchDirect, "probWatchDirect", session)
+    ) {
+      await handleNextAction({
+        action: "WatchDirect",
+        stateName: "MainProcess",
+      });
+    } else if (
+      probabilityCheck(
+        appConfig.probEndSessionNow,
+        "probEndSessionNow",
+        session
+      )
+    ) {
+      await handleNextAction({
+        action: "endNow",
+        stateName: "MainProcess",
+      });
+    } else if (
+      probabilityCheck(
+        appConfig.probChannelBrowse,
+        "probChannelBrowse",
+        session
+      )
+    ) {
+      await handleNextAction({
+        action: "viewChannel",
+        stateName: "MainProcess",
+      });
+    } else {
+      console.log("NO actigon ");
+    }
 
-    // 4. Initialize controllers
-    homeController = new HomeController();
-    searchController = new SearchController();
-    videoController = new VideoController();
-    channelController = new ChannelController();
-    logger.info("Controllers initialized");
+    await randomDelay(3000, 5000);
 
-    // 5. Bắt đầu từ trang chủ
-    await handleHomePage();
+    session.saveHTMLReport();
 
-    // 6. Generate session summary
-    const summary = session.generateSessionSummary();
-    logger.info("Session summary", { summary });
-
-    // 7. Take a final screenshot
-    await browserManager.saveScreenshot("final_state");
-
-    // 8. Close browser
     await randomDelay(5000, 10000); // Wait a bit before closing
     await browserManager.close();
     logger.info("Browser closed");
 
     logger.info("Session completed successfully");
   } catch (error) {
-    logger.error("Error in main process", { error });
+    logger.error("Error in main process", error);
 
     // Ensure browser is closed on error
     try {
@@ -307,6 +288,5 @@ async function main() {
     process.exit(1);
   }
 }
-
 // Run the main function
 main();

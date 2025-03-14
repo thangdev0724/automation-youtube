@@ -1,38 +1,68 @@
 // src/models/session.ts
-import { ISessionConfig } from "../types/session";
+import { Action, ISessionConfig } from "../types/config";
+import { generateHTMLReport } from "../utils/helper";
 import { logger } from "../utils/logger";
+// src/utils/enhanced-logger.ts
+import fs from "fs";
+import path from "path";
 
+interface IRandom {
+  configValue: number;
+  configName: string;
+  actualValue: number;
+  result: boolean;
+}
+
+interface IError {
+  message: string;
+  stack?: string;
+  source: string;
+}
+
+interface IAction {
+  action: Action;
+  source: string;
+  data?: any;
+}
+
+interface IState {
+  stateFrom: string;
+  stateTo: string;
+}
 export class Session {
-  // Thời gian bắt đầu phiên
+  private sessionId: string;
+  private accountId?: string;
   public readonly startTime: Date;
 
-  // Số lượng video đã xem
   private videosWatched: number = 0;
 
-  // Số lượng tìm kiếm đã thực hiện
   private searchesPerformed: number = 0;
 
-  // Thời gian hoạt động cuối cùng
   private lastActivityTime: Date;
 
   // Các giới hạn phiên
-  private readonly sessionDuration: number; // minutes
+  private readonly sessionDuration: number;
   private readonly maxVideos: number;
-  private readonly idleTimeout: number; // minutes
+  private readonly idleTimeout: number;
 
-  // Các thông số khác
   private interactions = {
     likes: 0,
     comments: 0,
     subscribes: 0,
   };
 
-  /**
-   * Khởi tạo một phiên mới
-   */
+  private summarize = {
+    random: [] as IRandom[],
+    error: [] as IError[],
+    stateTransition: [] as IState[],
+    activities: [] as IAction[],
+  };
+
   constructor(config: ISessionConfig) {
+    this.sessionId = `accounnt-${config.accountId}-session-${Date.now()}`;
     this.startTime = new Date();
     this.lastActivityTime = new Date();
+    this.accountId = config.accountId;
 
     this.sessionDuration = config.sessionDuration;
     this.maxVideos = config.maxVideos;
@@ -80,6 +110,38 @@ export class Session {
     logger.info(`Interaction recorded: ${type}`, {
       count: this.interactions[type],
       totalInteractions: this.getTotalInteractions(),
+    });
+  }
+
+  recordRandom(configValue: number, configName: string, actualValue: number) {
+    this.summarize.random.push({
+      configValue,
+      configName,
+      actualValue,
+      result: actualValue <= configValue,
+    });
+  }
+
+  recordError(error: any, stack: string, source: string) {
+    this.summarize.error.push({
+      source,
+      message: error,
+      stack,
+    });
+  }
+
+  recordActivities(action: Action, source: string, data?: any) {
+    this.summarize.activities.push({
+      action,
+      source,
+      data,
+    });
+  }
+
+  recordStateTransition(stateFrom: string, stateTo: string) {
+    this.summarize.stateTransition.push({
+      stateFrom,
+      stateTo,
     });
   }
 
@@ -131,6 +193,14 @@ export class Session {
     return this.searchesPerformed;
   }
 
+  getAccountId(): string | undefined {
+    return this.accountId;
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
   /**
    * Kiểm tra giới hạn phiên
    * Trả về thông tin nếu vượt quá giới hạn
@@ -170,6 +240,28 @@ export class Session {
     return { exceedsLimit: false };
   }
 
+  saveLogs() {}
+
+  /**
+   * Save the HTML report to a file
+   */
+  saveHTMLReport(): string {
+    const htmlContent = {
+      ...this.summarize,
+      summary: this.generateSessionSummary(),
+    };
+
+    const html = generateHTMLReport(htmlContent);
+
+    const reportFilename = `${this.sessionId}_report.html`;
+    const logDirectory = path.join(process.cwd(), "logs", "reports");
+    const reportPath = path.join(logDirectory, reportFilename);
+    fs.writeFileSync(reportPath, html);
+    logger.info(`HTML report saved to: ${reportPath}`);
+
+    return reportPath;
+  }
+
   /**
    * Tạo báo cáo tóm tắt phiên
    */
@@ -191,10 +283,6 @@ export class Session {
         ...this.interactions,
         total: this.getTotalInteractions(),
       },
-      averageVideosPerMinute:
-        this.videosWatched / (sessionDurationMinutes || 1),
-      averageSearchesPerMinute:
-        this.searchesPerformed / (sessionDurationMinutes || 1),
     };
   }
 }

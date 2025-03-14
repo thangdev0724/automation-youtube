@@ -1,18 +1,24 @@
-export interface ISearchStateConfig {
-  correctSearchTypo: number;
-  hoverThumbnail: number;
-  continueScrollResults: number;
-  clickVideoAfterHover: number;
-  continueScrollAfterHover: number;
-  searchToVideo: number;
-  searchToHome: number;
-  scrollUp: number;
-  endSearch: number;
-  continueScrollAgain: number;
-  continueScrollAfterScrollUp: number;
-  hoverAfterScrollUp: number;
-  searchKeywords: string[];
-  specificKeyword: string;
+export interface ISessionConfig {
+  sessionDuration: number; // 20-90 (minutes)
+  maxVideos: number; // 5-15
+  idleTimeout: number; // 5-15 (minutes)
+  accountId?: string;
+}
+export interface ISearchStateConfig extends IEvaluateSearchVideoConfig {
+  probInputCorrect: number;
+  keywords: string[];
+}
+
+export interface IEvaluateSearchVideoConfig {
+  probSearchVideoGood: number;
+  probWatchIfGoodSearch: number;
+  probWatchIfBadSearch: number;
+}
+
+export interface IEvaluateWatchDirectVideoConfig {
+  probDirectVideoGood: number;
+  probWatchIfGoodDirect: number;
+  probWatchIfBadDirect: number;
 }
 
 export interface IWatchVideoConfig {
@@ -51,16 +57,24 @@ export interface IWatchVideoResult {
   error?: any;
 }
 
-export interface IHomeStateConfig {
-  homeToSearch: number;
-  homeToVideo: number;
-  checkNotifications: number;
-  scrollHome: number;
-  stopScrollingToWatchVideo: number;
-  continueScrolling: number;
-  homeVideoToSearch: number;
-  clickHomeVideo: number;
-  endHomeBrowsing: number;
+export interface IAppConfig {
+  probHomeBrowsing: number;
+  probSearch: number;
+  probWatchDirect: number;
+  probChannelBrowse: number;
+  probEndSessionNow: number;
+}
+
+export interface IEvaluateHomeVideoConfig {
+  probHomeVideoGood: number;
+  probWatchIfGoodHome: number;
+  probWatchIfBadHome: number;
+}
+
+export interface IHomeConfig extends IEvaluateHomeVideoConfig {
+  probCheckNotifications: number;
+  probPauseOnVideo: number;
+  probMaxScroll: number;
 }
 
 export interface IDetermineActionConfig extends IWatchVideoConfig {
@@ -72,12 +86,46 @@ export interface IDetermineActionConfig extends IWatchVideoConfig {
 }
 
 export interface IChannelConfig {
-  channelToVideo: number;
-  channelToSearch: number;
-  channelToHome: number;
-  viewChannelInfo: number;
-  viewChannelVideos: number;
-  selectChannelVideo: number;
-  switchChannelTab: number;
-  leaveChannel: number;
+  probScrollChannelVideo: number;
+  probReadChannelInfo: number;
+  probPickChannelVideo: number;
+}
+
+export type Action =
+  | "None"
+  | "watchVideo"
+  | "homeBrowsing"
+  | "endNow"
+  | "viewChannel"
+  | "Search"
+  | "newSearch"
+  | "Error"
+  | "Like"
+  | "Comment"
+  | "Subscribe"
+  | "CheckNoti"
+  | "WatchVidBad"
+  | "WatchVidGood"
+  | "SkipAd"
+  | "clickHome"
+  | "playVideo"
+  | "skipWatchVideo"
+  | "endHomeBrowseEarly"
+  | "WatchDirect"
+  | "endSession";
+
+export type StateName =
+  | "MainProcess"
+  | "Search"
+  | "WatchVideo"
+  | "Home"
+  | "Channel"
+  | "HomeBrowsing"
+  | "WatchDirect"
+  | "EndSession";
+export interface IResultState {
+  action: Action;
+  data?: any;
+  error?: any;
+  stateName?: StateName;
 }

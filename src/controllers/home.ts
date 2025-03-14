@@ -1,10 +1,20 @@
 // src/controllers/home.ts
-import { BrowserManager } from "./browser";
-import { logger } from "../utils/logger";
-import { randomDelay, probabilityCheck, randomInt } from "../utils/random";
+import { Page } from "playwright";
+import {
+  HOME_NOTIFICATIONS,
+  HOME_SELECTOR,
+  HOME_VIDEO_LINK_TITLE,
+  HOME_VIDEO_THUMBNAILS,
+  SEARCH_INPUT,
+} from "../constants/selector";
 import { Session } from "../models/session";
-import { ISessionConfig } from "../types/session";
-import { IHomeStateConfig } from "../types/config";
+import { IHomeConfig, IResultState } from "../types/config";
+import { logger } from "../utils/logger";
+import { probabilityCheck, randomDelay } from "../utils/random";
+import { BrowserManager } from "./browser";
+import { randomInt } from "crypto";
+
+const PERCENTAGE_SCROLL_PAGE = 0.7;
 
 export class HomeController {
   private browserManager: BrowserManager;
@@ -17,8 +27,12 @@ export class HomeController {
    * Điều hướng đến trang chủ YouTube
    */
   async navigateToHome(): Promise<boolean> {
+    const page = await this.browserManager.getCurrentPage();
     try {
       logger.info("Navigating to YouTube home page");
+      if (page.url() === "https://www.youtube.com/") {
+        return true;
+      }
       await this.browserManager.navigateTo("https://www.youtube.com");
       return true;
     } catch (error) {
@@ -35,20 +49,32 @@ export class HomeController {
    */
   async browseHomePage(
     session: Session,
-    config: IHomeStateConfig
-  ): Promise<{ action: string; data?: any }> {
+    config: IHomeConfig
+  ): Promise<IResultState> {
     try {
       logger.info("Browsing YouTube home page");
       const page = await this.browserManager.getCurrentPage();
 
       // Cập nhật thời gian hoạt động của phiên
       session.updateActivity();
+      // Kiểm tra trạng thái session
+      session.checkLimits();
+      const resultBrowse: IResultState = {
+        action: "None",
+        data: null,
+        stateName: "HomeBrowsing",
+      };
 
-      // Kiểm tra thông báo với xác suất đã cấu hình
-      if (probabilityCheck(config.checkNotifications)) {
-        logger.info("Checking notifications");
+      if (
+        probabilityCheck(
+          config.probCheckNotifications,
+          "probCheckNotifications",
+          session
+        )
+      ) {
+        logger.info("Checked notifications");
+        session.recordActivities("CheckNoti", "home");
         try {
-          // Tìm kiếm nút thông báo
           const notificationButton = await this.getHomePageElements().then(
             (elements) => elements.notificationButton
           );
@@ -56,227 +82,114 @@ export class HomeController {
             await notificationButton.click();
             await randomDelay(2000, 4000);
 
-            // Đóng menu thông báo
             await page.keyboard.press("Escape");
             await randomDelay(500, 1500);
           } else {
             logger.warn("Notification button not found");
           }
         } catch (notificationError) {
-          logger.warn("Error checking notifications", {
-            error: notificationError,
-          });
+          session.recordError(notificationError, "check notification", "home");
         }
-      }
 
-      logger.info("Giá trị homeToSearch: " + config.homeToSearch);
-      logger.info("Giá trị homeToVideo: " + config.homeToVideo);
-      logger.info("Giá trị clickHomeVideo: " + config.clickHomeVideo);
+        // End browsing home early
+        if (
+          probabilityCheck(
+            100 - config.probPauseOnVideo,
+            "endHomeBrowingEarly",
+            session
+          )
+        ) {
+          logger.info("End browsing home early");
+          resultBrowse.action = "endNow";
+          return resultBrowse;
+        }
 
-      if (probabilityCheck(config.homeToSearch)) {
-        return { action: "search" };
-      }
+        // Browsing video on Home
+        let exitScroll = false;
+        while (!exitScroll) {
+          session.checkLimits();
+          this.scrollDown();
+          await randomDelay(1500, 3500);
+          if (
+            probabilityCheck(
+              config.probPauseOnVideo,
+              "probPauseOnVideo",
+              session
+            )
+          ) {
+            logger.info("Evaluate video...");
+            await this.elementsInViewport(HOME_VIDEO_LINK_TITLE);
 
-      if (probabilityCheck(config.homeToVideo)) {
-        await this.playRandomVideo();
-        return {
-          action: "watchVideo",
-          data: {
-            source: "home",
-            videoTitle: "Unknown",
-          },
-        };
-      }
+            if (
+              probabilityCheck(
+                config.probHomeVideoGood,
+                "probHomeVideoGood",
+                session
+              )
+            ) {
+              logger.info("Evaluated video is good...");
 
-      // Cuộn trang
-      logger.info("Scrolling through home page");
-      const scrollCount = randomInt(3, 10);
+              if (
+                probabilityCheck(
+                  config.probWatchIfGoodHome,
+                  "probWatchIfGoodHome",
+                  session
+                )
+              ) {
+                session.recordActivities("WatchVidGood", "home");
+                this.playRandomVideo(page, session);
+                await randomDelay(2000, 4000);
+                resultBrowse.action = "watchVideo";
+                break;
+              } else {
+                session.recordActivities("skipWatchVideo", "home");
+                break;
+              }
+            } else {
+              logger.info("Evaluated video is bad...");
+              if (
+                probabilityCheck(
+                  config.probWatchIfBadHome,
+                  "probWatchIfBadHome",
+                  session
+                )
+              ) {
+                session.recordActivities("WatchVidBad", "home");
+                this.playRandomVideo(page, session);
+                await randomDelay(2000, 4000);
+                resultBrowse.action = "watchVideo";
 
-      for (let i = 0; i < scrollCount; i++) {
-        // Cuộn xuống
-        await page.evaluate(() => {
-          window.scrollBy({
-            top: window.innerHeight * 0.7,
-            behavior: "smooth",
-          });
-        });
-
-        await randomDelay(1500, 3500);
-
-        // Dừng cuộn để xem một video?
-
-        logger.info(
-          "Giá trị stopScrollingToWatchVideo: " +
-            config.stopScrollingToWatchVideo
-        );
-        if (probabilityCheck(config.stopScrollingToWatchVideo)) {
-          logger.info("Pausing on video thumbnail");
-
-          // Lấy danh sách thumbnails
-          const thumbnails = await this.getHomePageElements().then(
-            (elements) => elements.videoThumbnails
-          );
-
-          if (thumbnails.length > 0) {
-            // Chọn một thumbnail ngẫu nhiên
-            const randomIndex = randomInt(0, thumbnails.length - 1);
-            const thumbnail = thumbnails[randomIndex];
-
-            // Scroll để thumbnail hiển thị trong viewport
-            await thumbnail.scrollIntoViewIfNeeded();
-            await randomDelay(500, 1500);
-
-            // Hover lên thumbnail
-            await thumbnail.hover();
-            await randomDelay(1000, 3000);
-
-            logger.info(
-              "Giá trị homeVideoToSearch: " + config.homeVideoToSearch
-            );
-            if (probabilityCheck(config.homeVideoToSearch)) {
-              logger.info("Switching to search from home");
-              const searchBox = await this.getHomePageElements().then(
-                (elements) => elements.searchBox
-              );
-              if (searchBox) {
-                await searchBox.click();
-                return { action: "search" };
+                break;
+              } else {
+                session.recordActivities("skipWatchVideo", "home");
+                break;
               }
             }
-
-            logger.info(" Giá trị clickHomeVideo: " + config.clickHomeVideo);
-            if (probabilityCheck(config.clickHomeVideo)) {
-              logger.info("Clicking on home page video");
-
-              let videoTitle = "Unknown";
-              try {
-                const titleElement = await thumbnail.$("a#video-title-link");
-                if (titleElement) {
-                  videoTitle =
-                    (await titleElement.getAttribute("title")) || "Unknown";
-                }
-              } catch (e) {
-                logger.warn("Could not get video title", { error: e });
-              }
-
-              // Click vào thumbnail
-              await thumbnail.$eval("a#video-title-link", (el: HTMLElement) =>
-                el.click()
-              );
-              await randomDelay(2000, 4000);
-
-              return {
-                action: "watchVideo",
-                data: {
-                  source: "home",
-                  videoTitle,
-                },
-              };
-            }
-
-            logger.info("Ending home browsing after pausing on video");
-            return { action: "endHomeBrowsing" };
-          }
-        } else {
-          if (probabilityCheck(config.endHomeBrowsing)) {
-            logger.info("Ending home browsing while scrolling");
-            return { action: "endHomeBrowsing" };
           }
         }
-
-        // Kiểm tra giới hạn phiên sau mỗi lần cuộn
-        const limits = session.checkLimits();
-        if (limits.exceedsLimit) {
-          logger.info("Session limit exceeded while browsing home", {
-            reason: limits.reason,
-          });
-          return {
-            action: "endSession",
-            data: { reason: limits.reason },
-          };
-        }
       }
-
-      // Mặc định nếu đã cuộn hết mà không có quyết định cụ thể
-      logger.info("Finished scrolling home page, deciding next action");
-      if (probabilityCheck(config.homeToSearch)) {
-        return { action: "search" };
-      } else if (probabilityCheck(config.homeToVideo)) {
-        this.playRandomVideo();
-        return {
-          action: "watchVideo",
-          data: {
-            source: "home",
-            videoTitle: "Unknown",
-          },
-        };
-      } else {
-        return { action: "endHomeBrowsing" };
-      }
-    } catch (error) {
-      logger.error("Error browsing home page", { error });
-      await this.browserManager.saveScreenshot("home_error");
-      return { action: "error", data: { error } };
+      return resultBrowse;
+    } catch (e) {
+      session.recordError(e, "browseHomePage", "home");
+      return {
+        action: "Error",
+        error: e,
+      };
     }
   }
 
-  /**
-   * Xử lý việc kéo xuống và cuộn trang
-   */
-  async scrollPage(scrollDistance: number = 0.7): Promise<void> {
-    try {
-      const page = await this.browserManager.getCurrentPage();
-
-      await page.evaluate((distance) => {
-        window.scrollBy({
-          top: window.innerHeight * distance,
-          behavior: "smooth",
-        });
-      }, scrollDistance);
-
-      await randomDelay(1000, 3000);
-    } catch (error) {
-      logger.error("Error scrolling page", { error });
-    }
-  }
-
-  /**
-   * Xử lý việc cuộn lên trên
-   */
-  async scrollUp(scrollDistance: number = 0.5): Promise<void> {
-    try {
-      const page = await this.browserManager.getCurrentPage();
-
-      await page.evaluate((distance) => {
-        window.scrollBy({
-          top: -window.innerHeight * distance,
-          behavior: "smooth",
-        });
-      }, scrollDistance);
-
-      await randomDelay(1000, 2000);
-    } catch (error) {
-      logger.error("Error scrolling page up", { error });
-    }
-  }
-
-  /**
-   * Nắm bắt các element trên trang cho việc xử lý sự kiện
-   */
-  async getHomePageElements() {
+  private async getHomePageElements() {
     const page = await this.browserManager.getCurrentPage();
 
     try {
       return {
-        videoThumbnails: await page.$$("ytd-rich-item-renderer"),
-        searchBox: await page.$(
-          "#center > yt-searchbox > div.ytSearchboxComponentInputBox > form > input"
-        ),
-        notificationButton: await page.$("#button > yt-icon-badge-shape"),
-        homeButton: await page.$('a[aria-label="Home"]'),
+        videoThumbnails: await page.$$(HOME_VIDEO_THUMBNAILS),
+        searchBox: await page.$(SEARCH_INPUT),
+        notificationButton: await page.$(HOME_NOTIFICATIONS),
+        homeButton: await page.$(HOME_SELECTOR),
       };
     } catch (error) {
-      logger.error("Error getting home page elements", { error });
+      logger.error("Error getting home page elements", error);
       return {
         videoThumbnails: [],
         searchBox: null,
@@ -286,44 +199,52 @@ export class HomeController {
     }
   }
 
-  private async playRandomVideo() {
+  private async scrollDown() {
+    const page = await this.browserManager.getCurrentPage();
+    await page.evaluate((percen: number) => {
+      window.scrollBy({
+        top: window.innerHeight * percen,
+        behavior: "smooth",
+      });
+    }, PERCENTAGE_SCROLL_PAGE);
+  }
+
+  private async elementsInViewport(selector: string): Promise<Element[]> {
+    const page = await this.browserManager.getCurrentPage();
+    return await page.evaluate((selector: string) => {
+      return Array.from(document.querySelectorAll(selector))
+        .map((el, id) => {
+          el.classList.add(`automated-element-from-home`);
+          return el;
+        })
+        .filter((el) => {
+          const rect = el.getBoundingClientRect();
+          return (
+            rect.top < window.innerHeight &&
+            rect.bottom > 0 &&
+            rect.left < window.innerWidth &&
+            rect.right > 0
+          );
+        });
+    }, selector);
+  }
+
+  private async playRandomVideo(page: Page, session: Session) {
     try {
-      // Lấy danh sách thumbnails
-      const thumbnails = await this.getHomePageElements().then(
-        (elements) => elements.videoThumbnails
-      );
-
-      if (thumbnails.length > 0) {
-        // Chọn một thumbnail ngẫu nhiên
-        const randomIndex = randomInt(0, thumbnails.length - 1);
-        const thumbnail = thumbnails[randomIndex];
-
-        // Scroll để thumbnail hiển thị trong viewport
-        await thumbnail.scrollIntoViewIfNeeded();
-        await randomDelay(500, 1500);
-
-        // Hover lên thumbnail
-        await thumbnail.hover();
-        await randomDelay(1000, 3000);
-
-        let videoTitle = "Unknown";
-        try {
-          const titleElement = await thumbnail.$("a#video-title-link");
-          if (titleElement) {
-            videoTitle =
-              (await titleElement.getAttribute("title")) || "Unknown";
-          }
-        } catch (e) {
-          logger.warn("Could not get video title", { error: e });
-        }
-
-        // Click vào thumbnail
-        await thumbnail.$eval("a#video-title-link", (el: HTMLElement) =>
-          el.click()
-        );
-        await randomDelay(2000, 4000);
-      }
+      const elements = await page.$$(".automated-element-from-home");
+      const randomIndex = randomInt(0, elements.length - 1);
+      const randomElement = elements[randomIndex];
+      const title = await randomElement.textContent();
+      session.recordActivities("playVideo", "home", {
+        title: title,
+      });
+      logger.info(`Hovering over video ${title}`);
+      await randomElement.hover();
+      await randomDelay(1000, 2000);
+      logger.info(`Watching video: ${title}`);
+      await randomElement.click();
     } catch (error) {
+      session.recordError(error, "playRandomVideo", "home");
       logger.error("Error getting home page elements", { error });
     }
   }

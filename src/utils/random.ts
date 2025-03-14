@@ -1,8 +1,16 @@
+import { Session } from "../models/session";
+
 /**
  * Returns true with the given probability percentage
  */
-export function probabilityCheck(percentage: number): boolean {
-  return Math.random() * 100 <= percentage;
+export function probabilityCheck(
+  percentage: number,
+  configName: string,
+  session: Session
+): boolean {
+  const randomValue = Math.random() * 100;
+  session.recordRandom(percentage, configName, randomValue);
+  return randomValue <= percentage;
 }
 
 /**

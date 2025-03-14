@@ -6,3 +6,5 @@ cookies.json
 /logs/screenshots/*
 /src/config/*
 !src/config/.gitkeep
+
+/logs/reports

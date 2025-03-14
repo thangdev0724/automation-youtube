@@ -1,8 +1,6 @@
 export const SEARCH_INPUT =
   "#center > yt-searchbox > div.ytSearchboxComponentInputBox > form > input";
 
-export const HOME_SELECTOR = "#start #logo.ytd-topbar-logo-renderer";
-
 export const VIDEO_STREAM_SELECTOR =
   "#movie_player > div.html5-video-container > video";
 
@@ -15,3 +13,12 @@ export const CHANNEL_ABOUT =
 export const CHANNEL_VIDEO_ITEM = "#video-title-link";
 export const CHANNEL_TAB_ITEM =
   ".yt-tab-shape-wiz.yt-tab-shape-wiz--host-clickable";
+
+// Home
+export const HOME_SELECTOR = "#start #logo.ytd-topbar-logo-renderer";
+export const HOME_VIDEO_THUMBNAILS = ".ytd-rich-item-renderer";
+export const HOME_NOTIFICATIONS = "#button > yt-icon-badge-shape";
+export const HOME_VIDEO_LINK_TITLE = "a#video-title-link"
+
+// Search
+export const SEARCH_VIDEO_LINK_TITLE = "a#video-title"
